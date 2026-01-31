@@ -9,9 +9,9 @@ Step-by-step plan with checkpoints, verification, and contingencies. Re-checked 
 | Phase | Status | Next |
 |-------|--------|------|
 | 1 – Cross-build in WSL | [x] Done | – |
-| 2 – Validate binaries & SEH | [x] Done | – (hello/trap run on Windows arm64 via GitHub Actions CI; trap printed "Caught: The Unwind Trap") |
-| 3 – Native ppca64.exe | [ ] **Next** | Build compiler for aarch64-win64 with ppcrossa64; get full CI green first |
-| 3b – Bounty Boss test | [ ] Planned | Add try...finally + exit test to CI once workflow is green (see gemini-conversation-summary.md) |
+| 2 – Validate binaries & SEH | [x] Done | – (hello/trap run on Windows arm64 via CI; trap printed "Caught: The Unwind Trap") |
+| 3 – Native ppca64.exe | [x] Done | – (CI builds ppca64, stages it, Windows job runs ppca64 -iV) |
+| 3b – Bounty Boss test | [ ] **Next** | Fix try...finally + exit on Windows arm64 so arm64trap.exe passes; then CI fully green |
 | 4 – Self-hosting (cycle) | [ ] | Run make cycle on Windows arm64 |
 | 5 – Lazarus | [ ] | Build Lazarus with toolchain |
 | 6 – Shell ext / WinRE | [ ] | Build & test shell extension, WinRE if required |
@@ -113,9 +113,55 @@ We don’t know for certain. Phase 2 only proved that **one** SEH case works: a 
 - **Bug #66952** and recent “local unwind” MR (try/finally Exit/Break/Continue) are the same area; align fixes with trunk.
 
 
-### 2.7 Planned: Bounty Boss test (after CI is green)
+### 2.7 Bounty Boss test (try...finally + exit)
 
-- **Goal:** Add the foundation's "Bounty Boss" test (try...finally + exit) to CI: compile with ppcrossa64/ppca64, run on Windows arm64, assert output contains "Success: Finally block executed!". Test snippet and rationale in `docs/gemini-conversation-summary.md`. Do this once the current workflow (hello, trap, ppca64 verify) is fully passing.
+- **Goal:** arm64trap.exe (try...finally + exit) must run on Windows arm64 and print "Success: Finally block executed!" and "Done." CI runs it last; when it fails, we diagnose and fix.
+
+---
+
+## Diagnosing Bounty Boss (try...finally + exit)
+
+When arm64trap.exe fails on Windows arm64, use this to find the cause and fix.
+
+### Step 1: Capture the failure mode
+
+- **Where:** Run arm64trap.exe on Windows arm64 (download artifact from CI or build locally with ppcrossa64).
+- **What to record:**
+  - Exit code (e.g. 0, 1, or crash/hang).
+  - Stdout: does it print "Entering try block..."? "Success: Finally block executed!"? "Done."?
+  - Stderr: any message?
+  - If it crashes: address or exception type if visible.
+- **CI:** The "Run Bounty Boss test" step already prints output and fails with a clear message; check the job log for the exact output.
+
+### Step 2: Generate and inspect assembly
+
+- **On Linux (WSL or CI):** Compile arm64trap.pas with `-a` to get assembly:
+  ```bash
+  ppcrossa64 -Twin64 -XPaarch64-w64-mingw32- -Fu$UP/rtl -Fu$UP/rtl-objpas -FD/path/to/llvm-mingw/bin \
+    -a -FE. -oarm64trap.exe docs/phase2-tests/arm64trap.pas
+  ```
+  This produces `arm64trap.s`. Inspect:
+  - `.seh_proc` / `.seh_endproc` and `.seh_handler __FPC_specific_handler` (unwind scope).
+  - `.seh_handlerdata` and scope records (SCOPE_FINALLY / SCOPE_IMPLICIT: try start, try end, finally handler).
+  - The code path for **exit**: do we emit a **plain JMP** to the finally label, or a **call** to an unwind helper?
+- **Compare with working case:** trap.pas (try/except) works; diff `trap.s` vs `arm64trap.s` for the procedure that contains try/finally and the exit path.
+
+### Step 3: Compare with x86_64-win64 (working)
+
+- **x86_64-win64:** In `compiler/x86_64/cgcpu.pas`, `g_local_unwind` is overridden for `system_x86_64_win64`: it calls `_FPC_local_unwind(frame, target)` (two args: current stack frame, target label). The RTL implements this in `rtl/win64/seh64.inc` with `RtlUnwindEx(frame,target,...)` so the OS runs finally blocks during unwind.
+- **aarch64-win64:** In `compiler/aarch64/cgcpu.pas` there is **no** override of `g_local_unwind`. The default in `compiler/cgobj.pas` is `a_jmp_always(list,l)` — a plain jump to the finally label. So we never call the Windows unwind API; the runtime never runs the finally in the “correct” way for SEH, and the program can crash, hang, or print wrong output.
+
+### Step 4: Root cause and fix
+
+- **Root cause:** For try...finally + exit (or break/continue), the aarch64 backend emitted a **plain JMP** to the finally label instead of calling **RtlUnwindEx** (via `_FPC_local_unwind`). So local unwind for finally was not implemented for aarch64-win64.
+- **Fix (compiler):** Implement `tcgaarch64.g_local_unwind` in `compiler/aarch64/cgcpu.pas` for `system_aarch64_win64`, mirroring `tcgx86_64.g_local_unwind`: call `_FPC_local_unwind(SP, target)` (current frame pointer and target label). The RTL already provides `_fpc_local_unwind` in `rtl/win64/seh64.inc`; the compiler just had to emit the call for aarch64.
+- **Fix implemented:** See **docs/bounty-boss-local-unwind-fix.md** (white paper: problem, root cause, implementation, verification). Code change: `compiler/aarch64/cgcpu.pas` — override `g_local_unwind` for `system_aarch64_win64` to call `_FPC_local_unwind(SP, target)`.
+- **Check:** Recompile arm64trap.pas, run on Windows arm64; expect "Success: Finally block executed!" and "Done."; CI “Run Bounty Boss test” should pass.
+- **References:** Bug #66952; “local unwind” MR; `compiler/aarch64/ncpuflw.pas`; `compiler/aarch64/cpupi.pas`; **docs/bounty-boss-local-unwind-fix.md**.
+
+### Optional: CI artifact for assembly
+
+- Add a step in the crossbuild job (optional): compile arm64trap.pas with `-a`, upload `arm64trap.s` (or the whole phase2-tests dir) as an artifact so you can inspect the generated unwind without a local Windows arm64 run.
 
 ---
 
@@ -310,9 +356,10 @@ then you have provided **concrete proof** that the backend is production-ready. 
 
 1. [x] Confirm Phase 1 checkpoints (ppcrossa64 + units).
 2. [x] Run Phase 2.1–2.3 (hello, objdump, trap + .s inspection).
-3. [x] Run hello/trap on Windows arm64 (CI: GitHub Actions `windows-11-arm`); trap passed (“Caught: The Unwind Trap”).
-4. [ ] **Next:** Phase 3 – build native Windows arm64 compiler (ppca64.exe) with ppcrossa64; get CI fully green (staging + Bounty Boss + ppca64 verify).
-5. [ ] Set up Windows arm64 environment for Phase 4 (CI already has `windows-11-arm`; can use for cycle when we have ppca64.exe).
+3. [x] Run hello/trap on Windows arm64 (CI); trap passed (“Caught: The Unwind Trap”).
+4. [x] Phase 3 – build ppca64 with ppcrossa64; CI builds, stages, and verifies ppca64 -iV on Windows arm64.
+5. [ ] **Next:** Fix Bounty Boss (arm64trap.exe try...finally + exit) so CI is fully green; then Phase 4 (make cycle).
+6. [ ] Phase 4: make cycle on Windows arm64 (CI already has `windows-11-arm`).
 
 ---
 
@@ -344,3 +391,4 @@ Strategy: **Public–Private multi-stage launch** (see `docs/gemini-conversation
 - **Strategy / WSL / SEH:** `docs/gemini-conversation-summary.md`
 - **Plan and -ClvLLVM:** `docs/plan-win-aarch64.md`
 - **This file:** `docs/next-steps-detailed.md`
+- **Bounty Boss fix (white paper):** `docs/bounty-boss-local-unwind-fix.md` — problem, root cause, g_local_unwind implementation, verification.

@@ -249,13 +249,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Artifact "phase2-arm64-exes" is the arm64-exes/ dir; download extracts to workspace,
-      # so exes are at $env:GITHUB_WORKSPACE\arm64-exes\hello.exe, trap.exe, arm64trap.exe, ppca64.
+      # Artifact "phase2-arm64-exes" is the arm64-exes/ dir; download extracts to workspace.
       - name: Download arm64 executables
         uses: actions/download-artifact@v4
         with:
           name: phase2-arm64-exes
           path: ${{ github.workspace }}
+
+      - name: List artifact contents (sanity check)
+        run: |
+          Set-Location $env:GITHUB_WORKSPACE
+          $dir = if (Test-Path arm64-exes) { 'arm64-exes' } else { '.' }
+          Write-Host "Artifact contents ($dir):"
+          Get-ChildItem $dir -ErrorAction SilentlyContinue | Format-Table Name, Length -AutoSize
+        shell: pwsh
 
       - name: Run hello.exe and trap.exe
         run: |
@@ -274,7 +281,6 @@ jobs:
         shell: pwsh
 
       # Golden proof for bounty: verify trap.exe has valid ARM64 SEH unwind tables (.pdata).
-      # dumpbin is part of MSVC tools (often on Windows runners); if missing, we warn and continue.
       - name: Verify SEH unwind tables (dumpbin /pdata)
         run: |
           Set-Location $env:GITHUB_WORKSPACE
@@ -303,26 +309,6 @@ jobs:
             ($text -split "`n" | Select-Object -First 50) -join "`n"
             Write-Host "::warning::No obvious unwind pattern in dumpbin output; binary may still be valid."
           }
-          exit 0
-        shell: pwsh
-
-      - name: Run Bounty Boss test (try...finally + exit)
-        run: |
-          Set-Location $env:GITHUB_WORKSPACE
-          $dir = if (Test-Path arm64-exes\arm64trap.exe) { 'arm64-exes' } else { '.' }
-          Push-Location $dir
-          $out = .\arm64trap.exe 2>&1 | Out-String
-          Pop-Location
-          Write-Host $out
-          if ($out -notmatch 'Success: Finally block executed!') {
-            Write-Error "Bounty Boss failed: expected 'Success: Finally block executed!'. Got: $out"
-            exit 1
-          }
-          if ($out -notmatch 'Done\.') {
-            Write-Error "Bounty Boss failed: expected 'Done.'. Got: $out"
-            exit 1
-          }
-          Write-Host "Bounty Boss test passed."
           exit 0
         shell: pwsh
 
@@ -365,5 +351,26 @@ jobs:
             Write-Error "ppca64 -iV failed (exit $exitCode): $ver"
             exit 1
           }
+          exit 0
+        shell: pwsh
+
+      # Bounty Boss last: try...finally + exit (strictest SEH/local unwind). Run after all other checks.
+      - name: Run Bounty Boss test (try...finally + exit)
+        run: |
+          Set-Location $env:GITHUB_WORKSPACE
+          $dir = if (Test-Path arm64-exes\arm64trap.exe) { 'arm64-exes' } else { '.' }
+          Push-Location $dir
+          $out = .\arm64trap.exe 2>&1 | Out-String
+          Pop-Location
+          Write-Host $out
+          if ($out -notmatch 'Success: Finally block executed!') {
+            Write-Error "Bounty Boss failed: expected 'Success: Finally block executed!'. Got: $out"
+            exit 1
+          }
+          if ($out -notmatch 'Done\.') {
+            Write-Error "Bounty Boss failed: expected 'Done.'. Got: $out"
+            exit 1
+          }
+          Write-Host "Bounty Boss test passed."
           exit 0
         shell: pwsh
