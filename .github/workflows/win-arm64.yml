@@ -1,5 +1,5 @@
 # Windows arm64 CI – cross-build on Linux, run hello.exe/trap.exe on Windows arm64.
-# Caches: llvm-mingw (by release), FPC cross-build (by compiler/rtl/packages hash). See docs/ci-arm64-plan.md.
+# Caches: llvm-mingw (release), FPC cross-build + ppca64 (source hash), msgtxt.inc (msg hash). See docs/ci-arm64-plan.md.
 
 name: Windows arm64
 
@@ -51,12 +51,13 @@ jobs:
           tar -xf "$RUNNER_TEMP/llvm-mingw.tar.xz" -C "$RUNNER_TEMP/llvm-mingw" --strip-components=1
           "$RUNNER_TEMP/llvm-mingw/bin/aarch64-w64-mingw32-clang" --version
 
-      - name: Cache FPC cross-build (ppcrossa64 + aarch64-win64 units)
+      - name: Cache FPC cross-build (ppcrossa64 + aarch64-win64 units + ppca64)
         id: cache_fpc
         uses: actions/cache@v4
         with:
           path: |
             compiler/ppcrossa64
+            compiler/ppca64
             ${{ runner.temp }}/fpc_install
           key: fpc-aarch64-win64-${{ runner.os }}-${{ hashFiles('compiler/**', 'rtl/**', 'packages/**', 'Makefile', 'Makefile.fpc') }}
 
@@ -92,7 +93,17 @@ jobs:
             -o"$GITHUB_WORKSPACE/docs/phase2-tests/trap.exe" \
             docs/phase2-tests/trap.pas
 
+      - name: Cache msgtxt.inc / msgidx.inc (host-generated, skip rebuild when msg files unchanged)
+        id: cache_msgtxt
+        uses: actions/cache@v4
+        with:
+          path: |
+            compiler/msgtxt.inc
+            compiler/msgidx.inc
+          key: msgtxt-${{ runner.os }}-${{ hashFiles('compiler/msg/error*.msg') }}
+
       - name: Generate msgtxt.inc with host FPC (Phase 3)
+        if: steps.cache_msgtxt.outputs.cache-hit != 'true'
         run: |
           # msg2inc must run on the runner (Linux); make compiler uses FPC=ppcrossa64
           # which would build a Windows msg2inc.exe and then try to run it -> fail.
@@ -102,6 +113,7 @@ jobs:
           PATH: "/usr/bin:/usr/local/bin:$PATH"
 
       - name: Build native ppca64 (Phase 3)
+        if: steps.cache_fpc.outputs.cache-hit != 'true'
         run: |
           UP="$RUNNER_TEMP/fpc_install/lib/fpc/${{ env.FPC_VERSION }}/units/aarch64-win64"
           make -C compiler compiler -j4 \
@@ -151,10 +163,15 @@ jobs:
 
       - name: Verify ppca64 (Phase 3 native compiler)
         run: |
+          Set-Location $env:GITHUB_WORKSPACE
           Write-Host 'Artifact layout:'; Get-ChildItem compiler -ErrorAction SilentlyContinue; Get-ChildItem docs\phase2-tests -ErrorAction SilentlyContinue
-          $ppc = if (Test-Path compiler\ppca64) { '.\compiler\ppca64' } elseif (Test-Path ppca64) { '.\ppca64' } else { $null }
+          $ppc = $null
+          foreach ($cand in @('compiler\ppca64.exe', 'compiler\ppca64', 'ppca64.exe', 'ppca64')) {
+            if (Test-Path $cand) { $ppc = (Resolve-Path $cand).Path; break }
+          }
           if (-not $ppc) { Write-Error 'ppca64 not found'; exit 1 }
-          $ver = & $ppc -iV 2>&1
+          Write-Host "Running: $ppc -iV"
+          $ver = & $ppc '-iV' 2>&1
           $exitCode = $LASTEXITCODE
           Write-Host "ppca64 -iV: $ver"
           if ($exitCode -ne 0 -or -not $ver) {
