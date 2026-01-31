@@ -144,24 +144,50 @@ jobs:
         env:
           PATH: "/usr/bin:/usr/local/bin:$RUNNER_TEMP/llvm-mingw/bin:$PATH"
 
+      # Paths: compile writes to $GITHUB_WORKSPACE/docs/phase2-tests/{hello,trap,arm64trap}.exe;
+      # ppca64 is at $GITHUB_WORKSPACE/compiler/ppca64 (or compiler/aarch64/bin/aarch64-win64/).
+      # We stage into arm64-exes/ and upload that dir; download extracts to workspace.
+      - name: List expected exe locations (diagnostic)
+        run: |
+          D="$GITHUB_WORKSPACE"
+          echo "=== docs/phase2-tests ==="
+          ls -la "$D/docs/phase2-tests/" || true
+          echo "=== compiler (ppca64, ppcrossa64) ==="
+          ls -la "$D/compiler/ppca64" 2>/dev/null || echo "compiler/ppca64 not found"
+          ls -la "$D/compiler/ppcrossa64" 2>/dev/null || echo "compiler/ppcrossa64 not found"
+          find "$D/compiler" -maxdepth 4 -name 'ppca64*' -o -name 'ppcrossa64*' 2>/dev/null || true
+
       - name: Stage and upload arm64 executables and ppca64
         run: |
           set -e
           D="$GITHUB_WORKSPACE"
-          mkdir -p "$D/arm64-exes"
-          cp "$D/docs/phase2-tests/hello.exe" "$D/arm64-exes/"
-          cp "$D/docs/phase2-tests/trap.exe" "$D/arm64-exes/"
+          STAGE="$D/arm64-exes"
+          mkdir -p "$STAGE"
+          # Phase 2 test exes (compile writes to docs/phase2-tests/)
+          for f in hello trap; do
+            if [ -f "$D/docs/phase2-tests/${f}.exe" ]; then cp "$D/docs/phase2-tests/${f}.exe" "$STAGE/"; else echo "Missing: docs/phase2-tests/${f}.exe"; exit 1; fi
+          done
           if [ -f "$D/docs/phase2-tests/arm64trap.exe" ]; then
-            cp "$D/docs/phase2-tests/arm64trap.exe" "$D/arm64-exes/"
+            cp "$D/docs/phase2-tests/arm64trap.exe" "$STAGE/"
           elif [ -f "$D/docs/phase2-tests/arm64trap" ]; then
-            cp "$D/docs/phase2-tests/arm64trap" "$D/arm64-exes/arm64trap.exe"
+            cp "$D/docs/phase2-tests/arm64trap" "$STAGE/arm64trap.exe"
           else
-            echo "Missing arm64trap (expected arm64trap.exe or arm64trap in docs/phase2-tests/)"
+            echo "Missing: arm64trap (expected docs/phase2-tests/arm64trap.exe or arm64trap)"
             ls -la "$D/docs/phase2-tests/"
             exit 1
           fi
-          cp "$D/compiler/ppca64" "$D/arm64-exes/" || { echo "Missing compiler/ppca64"; ls -la "$D/compiler/ppca64" 2>/dev/null || true; exit 1; }
-          ls -la "$D/arm64-exes/"
+          # ppca64: make puts it in compiler/ or compiler/aarch64/bin/aarch64-win64/
+          PPC64=""
+          for cand in "$D/compiler/ppca64" "$D/compiler/aarch64/bin/aarch64-win64/ppca64"; do
+            if [ -f "$cand" ]; then PPC64="$cand"; break; fi
+          done
+          if [ -z "$PPC64" ]; then
+            echo "Missing: ppca64 (checked compiler/ppca64 and compiler/aarch64/bin/aarch64-win64/ppca64)"
+            find "$D/compiler" -maxdepth 4 -name 'ppca64*' 2>/dev/null || true
+            exit 1
+          fi
+          cp "$PPC64" "$STAGE/ppca64"
+          echo "Staged in $STAGE:"; ls -la "$STAGE/"
 
       - name: Upload arm64 executables and ppca64
         uses: actions/upload-artifact@v4
@@ -176,10 +202,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Artifact "phase2-arm64-exes" is the arm64-exes/ dir; download extracts to workspace,
+      # so exes are at $env:GITHUB_WORKSPACE\arm64-exes\hello.exe, trap.exe, arm64trap.exe, ppca64.
       - name: Download arm64 executables
         uses: actions/download-artifact@v4
         with:
           name: phase2-arm64-exes
+          path: ${{ github.workspace }}
 
       - name: Run hello.exe and trap.exe
         run: |
