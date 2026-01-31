@@ -26,8 +26,10 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential fpc
+          which make
           make -v
           fpc -iV
+          echo "PATH=$PATH"
 
       - name: Cache llvm-mingw
         id: cache_llvm
@@ -61,6 +63,7 @@ jobs:
       - name: Cross-install FPC aarch64-win64
         if: steps.cache_fpc.outputs.cache-hit != 'true'
         run: |
+          which make || true
           make crossinstall -j4 \
             CPU_TARGET=aarch64 \
             OS_TARGET=win64 \
@@ -69,7 +72,7 @@ jobs:
             CROSSOPT="-FD$RUNNER_TEMP/llvm-mingw/bin" \
             INSTALL_PREFIX="$RUNNER_TEMP/fpc_install"
         env:
-          PATH: "$RUNNER_TEMP/llvm-mingw/bin:$PATH"
+          PATH: "/usr/bin:/usr/local/bin:$RUNNER_TEMP/llvm-mingw/bin:$PATH"
 
       - name: Compile Phase 2 tests
         run: |
