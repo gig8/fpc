@@ -416,9 +416,9 @@ end;
 { Reference so _fpc_local_unwind is registered and written to system.ppu;
   backends (e.g. aarch64-win64 g_local_unwind) look it up via search_system_proc
   when compiling units that use try...finally+exit (e.g. rtl/win/sysutils.pp).
-  Assigned in initialization so the symbol is definitely "used" and exported. }
+  Initializer + init block both reference it so the symbol is "used" and exported. }
 var
-  fpc_local_unwind_export_ref: pointer;
+  fpc_local_unwind_export_ref: pointer = @_fpc_local_unwind;
 {$pop}
 
 procedure fpc_reraise; [public,alias:'FPC_RERAISE']; compilerproc;

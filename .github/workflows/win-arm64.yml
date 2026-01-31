@@ -81,6 +81,7 @@ jobs:
           echo "FPC cache OK: ppcrossa64, ppca64, fpc_install present."
 
       - name: Cross-install FPC aarch64-win64
+        id: crossinstall
         if: steps.cache_fpc.outputs.cache-hit != 'true'
         run: |
           which make || true
@@ -90,9 +91,27 @@ jobs:
             FPC=/usr/bin/fpc \
             BINUTILSPREFIX=aarch64-w64-mingw32- \
             CROSSOPT="-FD$RUNNER_TEMP/llvm-mingw/bin" \
-            INSTALL_PREFIX="$RUNNER_TEMP/fpc_install"
+            INSTALL_PREFIX="$RUNNER_TEMP/fpc_install" \
+            2>&1 | tee "$RUNNER_TEMP/crossinstall.log"
+          exit "${PIPESTATUS[0]}"
         env:
           PATH: "/usr/bin:/usr/local/bin:$RUNNER_TEMP/llvm-mingw/bin:$PATH"
+
+      - name: Show crossinstall log on failure
+        if: failure() && steps.cache_fpc.outputs.cache-hit != 'true'
+        run: |
+          echo "::group::Last 120 lines of crossinstall log"
+          tail -120 "$RUNNER_TEMP/crossinstall.log" || true
+          echo "::endgroup::"
+
+      - name: Upload crossinstall log on failure
+        if: failure() && steps.cache_fpc.outputs.cache-hit != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: crossinstall-log
+          path: ${{ runner.temp }}/crossinstall.log
+          retention-days: 7
+          if-no-files-found: ignore
 
       # FPC install puts cross-compiler in INSTALL_BINDIR/$(SOURCESUFFIX), e.g. fpc_install/bin/x86_64-linux/ppcrossa64.
       # Find it anywhere under fpc_install and copy to compiler/ so Phase 2 compile and cache find it.
@@ -115,6 +134,30 @@ jobs:
             fi
           fi
           [ -n "$FOUND" ] && echo "ppcrossa64 at: $FOUND"
+
+      # If sysutils.pp(659) fails with "Unknown compilerproc _fpc_local_unwind", system.ppu
+      # did not export the symbol. This step checks whether system.ppu contains it (when cache missed).
+      - name: Diagnose system.ppu for _fpc_local_unwind (sysutils.pp:659)
+        if: steps.cache_fpc.outputs.cache-hit != 'true'
+        run: |
+          INST="$RUNNER_TEMP/fpc_install"
+          UP="$INST/lib/fpc/${{ env.FPC_VERSION }}/units/aarch64-win64"
+          SPPU="$UP/rtl/system.ppu"
+          echo "::group::system.ppu compilerproc symbols (grep _fpc_)"
+          if [ -f "$SPPU" ]; then
+            strings "$SPPU" | grep -i '_fpc_' || true
+            if strings "$SPPU" | grep -q '_fpc_local_unwind'; then
+              echo "OK: system.ppu contains _fpc_local_unwind (sysutils.pp try...finally+exit will resolve)"
+            else
+              echo "::warning::system.ppu does NOT contain _fpc_local_unwind - sysutils.pp(659) will fail with Unknown compilerproc. Ensure rtl/win64/seh64.inc exports it (var init + init block)."
+            fi
+          else
+            echo "system.ppu not found at $SPPU (crossinstall may have failed before RTL install)"
+          fi
+          echo "::endgroup::"
+          echo "::group::sysutils.pp context (line 659 = exit in try...finally)"
+          sed -n '655,665p' rtl/win/sysutils.pp 2>/dev/null || true
+          echo "::endgroup::"
 
       - name: Compile Phase 2 tests
         run: |

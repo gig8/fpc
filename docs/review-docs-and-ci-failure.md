@@ -80,6 +80,17 @@ sysutils.pp(659,7) Fatal: Unknown compilerproc "_fpc_local_unwind". Check if you
 - **Why:** FPC only writes **registered** (i.e. "used") symbols to the .ppu. When the **system** unit is compiled, nothing in it references `_fpc_local_unwind`; only other units (e.g. sysutils) need it when they use try...finally+exit. So the procsym was never registered and never written to system.ppu.
 - **Fix (RTL):** In **rtl/win64/seh64.inc**, add a constant that references `@_fpc_local_unwind` so the symbol is used when compiling the system unit and thus registered and written to system.ppu. Then backends that call `search_system_proc('_fpc_local_unwind')` when compiling sysutils (or any unit with try...finally+exit) will find it.
 
+### Diagnostic when you see sysutils.pp(659,7) Fatal: Unknown compilerproc "_fpc_local_unwind"
+
+1. **Check whether system.ppu exports the symbol:**  
+   `strings <path>/system.ppu | grep -i fpc_local_unwind`  
+   (Path = e.g. `fpc_install/lib/fpc/3.3.1/units/aarch64-win64/rtl/system.ppu`.)  
+   If the output is empty, the system unit did not export `_fpc_local_unwind`; ensure rtl/win64/seh64.inc references it (var initializer and/or init block) so it is registered and written to the .ppu.
+
+2. **CI:** The workflow step **"Diagnose system.ppu for _fpc_local_unwind (sysutils.pp:659)"** runs when the FPC cache misses and prints whether system.ppu contains the symbol and shows the sysutils.pp context (lines 655–665: the try...finally + exit block).
+
+3. **Context:** sysutils.pp line 659 is an `exit` inside a try...finally (GetFinalPathNameByHandle / CreateFile block). That code path triggers the aarch64 backend’s `g_local_unwind`, which looks up `_fpc_local_unwind` via `search_system_proc`.
+
 ## 7. Short summary
 
 | Question | Answer |

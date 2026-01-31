@@ -11,8 +11,8 @@ Step-by-step plan with checkpoints, verification, and contingencies. Re-checked 
 | 1 – Cross-build in WSL | [x] Done | – |
 | 2 – Validate binaries & SEH | [x] Done | – (hello/trap run on Windows arm64 via CI; trap printed "Caught: The Unwind Trap") |
 | 3 – Native ppca64.exe | [x] Done | – (CI builds ppca64, stages it, Windows job runs ppca64 -iV) |
-| 3b – Bounty Boss test | [ ] **Next** | Fix try...finally + exit on Windows arm64 so arm64trap.exe passes; then CI fully green. If CI fails at **Cross-install FPC aarch64-win64** (exit 2), see **docs/review-docs-and-ci-failure.md** and get the job log or run `make crossinstall` locally. |
-| 4 – Self-hosting (cycle) | [ ] | Run make cycle on Windows arm64 |
+| 3b – Bounty Boss test | [x] Fixes pushed | **Verify CI:** Ensure run for current HEAD passes (cross-build, Phase 2 compile, Run Bounty Boss test). Fixes: compiler `g_local_unwind`, RTL export of `_fpc_local_unwind`, CI ppcrossa64 path + cache -v3. If CI fails at Cross-install (exit 2), see **docs/review-docs-and-ci-failure.md**; if at Phase 2 compile, check ppcrossa64 path under fpc_install. |
+| 4 – Self-hosting (cycle) | [ ] **Next after CI green** | Run make cycle on Windows arm64 |
 | 5 – Lazarus | [ ] | Build Lazarus with toolchain |
 | 6 – Shell ext / WinRE | [ ] | Build & test shell extension, WinRE if required |
 | 7 – Upstream | [ ] | PR, sponsor comment, FPC acceptance |
@@ -115,7 +115,8 @@ We don’t know for certain. Phase 2 only proved that **one** SEH case works: a 
 
 ### 2.7 Bounty Boss test (try...finally + exit)
 
-- **Goal:** arm64trap.exe (try...finally + exit) must run on Windows arm64 and print "Success: Finally block executed!" and "Done." CI runs it last; when it fails, we diagnose and fix.
+- **Goal:** arm64trap.exe (try...finally + exit) must run on Windows arm64 and print "Success: Finally block executed!" and "Done." CI runs it last.
+- **Status:** Fixes implemented and pushed: (1) compiler `tcgaarch64.g_local_unwind` for aarch64-win64 calls `_FPC_local_unwind(SP, target)`; (2) RTL exports `_fpc_local_unwind` in system.ppu via `fpc_local_unwind_export_ref` in init; (3) CI finds/copies ppcrossa64 under fpc_install when cache misses; cache key -v3. **Next:** Confirm CI run for current HEAD is fully green, then proceed to Phase 4 (make cycle).
 
 ---
 
