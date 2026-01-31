@@ -11,7 +11,7 @@ Step-by-step plan with checkpoints, verification, and contingencies. Re-checked 
 | 1 – Cross-build in WSL | [x] Done | – |
 | 2 – Validate binaries & SEH | [x] Done | – (hello/trap run on Windows arm64 via CI; trap printed "Caught: The Unwind Trap") |
 | 3 – Native ppca64.exe | [x] Done | – (CI builds ppca64, stages it, Windows job runs ppca64 -iV) |
-| 3b – Bounty Boss test | [ ] **Next** | Fix try...finally + exit on Windows arm64 so arm64trap.exe passes; then CI fully green |
+| 3b – Bounty Boss test | [ ] **Next** | Fix try...finally + exit on Windows arm64 so arm64trap.exe passes; then CI fully green. If CI fails at **Cross-install FPC aarch64-win64** (exit 2), see **docs/review-docs-and-ci-failure.md** and get the job log or run `make crossinstall` locally. |
 | 4 – Self-hosting (cycle) | [ ] | Run make cycle on Windows arm64 |
 | 5 – Lazarus | [ ] | Build Lazarus with toolchain |
 | 6 – Shell ext / WinRE | [ ] | Build & test shell extension, WinRE if required |

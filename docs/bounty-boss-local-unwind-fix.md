@@ -148,7 +148,42 @@ No RTL or linker script changes are required; `_fpc_local_unwind` is already imp
 
 ---
 
-## 6. Document info
+## 6. Three-perspective code review
+
+Three “genius programmer” angles on whether the fix really makes sense.
+
+### Brain 1: ABI and low-level correctness
+
+**Question:** Are we calling the RTL with the right convention and the right values?
+
+- **Signature:** RTL is `_fpc_local_unwind(frame, target: Pointer)`. We pass two parameters; paramanager.getcgtempparaloc for params 1 and 2 gives us the ABI locations (on ARM64 Windows: x0, x1 for first two pointer args). We load SP into para1 and the label’s address into para2. So we pass (current SP, address of target label). That matches the RTL and matches x86_64’s (RSP, target).
+- **Frame = SP:** x86_64 explicitly passes RSP and has a TODO that “using RSP is correct only while the stack is fixed.” We pass NR_STACK_POINTER_REG. At the point we emit the call, we’re in the middle of the procedure (inside the try block, at the exit path). SP is the current stack pointer and identifies “this frame” for the unwinder. Passing SP is consistent with x86_64 and is correct for “unwind from here.”
+- **Target = label address:** reference_reset_symbol(href, l, 0, 1, []) and a_loadaddr_ref_cgpara put the **address** of the label (the finally block) into the second parameter. RtlUnwindEx(TargetFrame, TargetIp, …) expects the IP to jump to after unwind. So we’re passing the right value.
+- **Verdict:** The call convention and argument values are correct. The fix is ABI-sound.
+
+### Brain 2: Control flow and SEH semantics
+
+**Question:** Does calling RtlUnwindEx here give the right runtime behaviour?
+
+- **Call site:** g_local_unwind is invoked from ncpuflw.pas when we have fc_unwind_exit (or fc_unwind_loop) and we’re leaving the try block via exit/break/continue. The label we pass is CurrExitLabel, which for try...finally is the **finally** label (set in taarch64tryfinallynode.pass_generate_code). So we’re saying: “unwind from current frame to the finally block.”
+- **RtlUnwindEx semantics:** The OS unwinds from TargetFrame toward the target, running each frame’s unwind handlers (our .pdata / __FPC_specific_handler). Our procedure has a scope that includes the try and the finally; the handler will run the finally code and then control is transferred to TargetIp. So the OS will run the finally block and then jump to the address we passed — i.e. the finally label. That is exactly what we want.
+- **No return:** RtlUnwindEx does not return to the caller; it transfers control to TargetIp. So we never “come back” from the call; the next instruction in the exit path is irrelevant. We don’t need to emit anything after the call.
+- **Verdict:** The choice to call _FPC_local_unwind (RtlUnwindEx) with (SP, finally_label) matches the Windows SEH model and gives correct try...finally + exit semantics.
+
+### Brain 3: Edge cases and robustness
+
+**Question:** What could go wrong, and is the implementation robust?
+
+- **search_system_proc:** If '_fpc_local_unwind' were missing, pd could be nil and getcgtempparaloc(list, pd, 1, para1) could fault. For win64 (including aarch64-win64), seh64.inc is included in the system unit and defines _fpc_local_unwind. So we’re safe as long as we only hit this path for system_aarch64_win64, which we guard with target_info.system <> system_aarch64_win64 → inherited. So we’re good.
+- **FP vs SP:** On aarch64-win64 we use a frame pointer (FP); g_proc_exit restores SP from FP. One could ask: should we pass FP instead of SP? x86_64 passes RSP and the RTL comment doesn’t mention FP. The unwinder needs a frame identifier to walk the stack; SP at the call site is a valid “current frame” reference. Using SP keeps us consistent with x86_64 and is correct. If future FPC work changes “frame” meaning (e.g. dynamic allocas), both backends would need to be updated together; the TODO in x86_64 already notes that.
+- **Parameter cleanup:** We do freecgpara and done in the same order as x86_64 (para2 then para1). No double-free; we’re consistent with the existing pattern.
+- **Verdict:** No obvious edge-case bugs. The fix is consistent with x86_64, properly guarded by target check, and uses the same RTL that already works for win64.
+
+**Overall:** All three perspectives agree: the fix is correct, ABI- and semantics-sound, and robust. It makes sense.
+
+---
+
+## 7. Document info
 
 - **Title:** Bounty Boss fix: Local unwind for try...finally + exit on Windows ARM64  
 - **Purpose:** White-paper style description of the problem, root cause, fix, and verification for the Bounty Boss (try...finally + exit) failure on Windows ARM64.  

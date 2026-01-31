@@ -1,0 +1,91 @@
+# Review: docs, analysis, and CI Cross-install failure
+
+**Purpose:** Tie together our docs and analysis, and reason about the CI failure (Cross-install FPC aarch64-win64, exit code 2) after the g_local_unwind fix.
+
+---
+
+## 1. What the docs and analysis say
+
+| Doc | Content |
+|-----|--------|
+| **next-steps-detailed.md** | Phase plan (1–7). Phase 1–3 done (cross-build, hello/trap, ppca64). **Phase 3b = Bounty Boss** (try...finally + exit) is “Next”. Diagnosing section: root cause = aarch64 had no `g_local_unwind` override (plain JMP); fix = implement it like x86_64, call `_FPC_local_unwind(SP, target)`. Build chain: ppcrossa64 (Linux) → RTL/units; Phase 3 builds ppca64 with ppcrossa64. |
+| **bounty-boss-local-unwind-fix.md** | White paper: problem (Bounty Boss test), root cause (default `a_jmp_always`), fix (override in cgcpu.pas for aarch64-win64 only), RTL already has `_fpc_local_unwind` in seh64.inc. Three-perspective review: ABI, SEH semantics, edge cases — all OK. |
+| **fix-unwind-metadata-analysis.md** | Rigorous analysis: fix location (cgcpu.pas 2210–2237), parity with x86_64, call site (ncpuflw, label = finally), RTL contract (seh64.inc, no CPU guard — present for aarch64). Verification checklist and conclusion: fix is correct. |
+| **ci-arm64-plan.md** | CI strategy (GitHub for windows-11-arm), caching, no submodule. Checklist: workflow in place, cross-build → artifact → Windows run. |
+
+**Unanimous:** The g_local_unwind change is correct. RTL provides `_fpc_local_unwind` for aarch64-win64 (seh64.inc, no CPU conditional). No RTL change required.
+
+---
+
+## 2. What’s going on: CI failure
+
+**Observed:** [Run](https://github.com/gig8/fpc/actions/runs/21540638738/job/62074495043) fails in **Cross-build (Linux → aarch64-win64)** at step **“Cross-install FPC aarch64-win64”** with **Process completed with exit code 2**.
+
+**Context:**
+
+- That step runs only when **FPC cross-build cache misses** (`if: steps.cache_fpc.outputs.cache-hit != 'true'`).
+- Cache key includes `hashFiles('compiler/**', 'rtl/**', ...)-v2`. The g_local_unwind change is under `compiler/**`, so the key changed and the cache missed.
+- So the failing run did a **full** `make crossinstall` (no restored compiler/RTL).
+
+**So:** The failure is “make crossinstall” (effectively `make install CROSSINSTALL=1`) exiting with 2. We do **not** have the actual log (GitHub shows “Sign in to view logs”). So we’re inferring.
+
+---
+
+## 3. Hypotheses for exit code 2
+
+### A) Our change breaks the RTL build (e.g. missing `_fpc_local_unwind` during system compile)
+
+- **Idea:** When ppcrossa64 compiles the **system** unit (rtl/win64/system.pp → seh64.inc), some code path might trigger `g_local_unwind` (e.g. try...finally + exit). We’d call `search_system_proc('_fpc_local_unwind')`. If the system unit is still being compiled and the symbol isn’t in the table yet, `search_system_proc` can call `message1(cg_f_unknown_compilerproc,...)` and then dereference a nil sym → internal error / crash → make exit 2.
+- **Check:** In seh64.inc there is no try...finally with **exit**; the `exit` usages are plain “leave procedure” in exception handlers. So **normal** compilation of the system unit should **not** call `g_local_unwind`. So this is **plausible only** if some other RTL unit or an unexpected path has try...finally+exit and is compiled before or without a visible `_fpc_local_unwind`. **Verdict:** Possible but not proven; would need the real error message.
+
+### B) Install / path mismatch (no compiler in expected place)
+
+- **Idea:** `make install CROSSINSTALL=1` might install the cross-compiler under `INSTALL_PREFIX` (e.g. `$RUNNER_TEMP/fpc_install/bin/`) and **not** leave a copy at `compiler/ppcrossa64`. Later steps (and cache) expect `compiler/ppcrossa64` and `compiler/ppca64`. If the Makefile doesn’t put binaries there, “Cross-install” could still succeed but a **later** step (e.g. “Compile Phase 2 tests”) would fail; the annotation might point at the wrong step, or make might report exit 2 from a dependent target.
+- **Verdict:** Possible. next-steps and the workflow assume ppcrossa64 ends up at `compiler/ppcrossa64` after a full build; the Makefile’s install layout for cross would need to be checked.
+
+### C) Unrelated make failure (tools, env, disk)
+
+- **Idea:** Exit 2 could be a generic make failure: missing tool (llvm-mingw, host FPC), path not set, or a transient error. Our change only affects code generation for aarch64-win64; building the **compiler** (ppcrossa64) is done by the **host** FPC; our code runs only when **ppcrossa64** is compiling user/RTL code for aarch64-win64.
+- **Verdict:** Possible. Without the log we can’t rule it out.
+
+---
+
+## 4. What we know from code
+
+- **`_fpc_local_unwind` for aarch64:** It **is** there. In rtl/win64/seh64.inc (lines 410–415) the procedure is **not** inside any `{$ifdef CPUX86_64}`; it’s compiled for both x86_64-win64 and aarch64-win64. So “_fpc_local_unwind is not there for arm” is **false** — the RTL is fine.
+- **`search_system_proc`:** In symtable.pas, if the symbol isn’t found it calls `message1(cg_f_unknown_compilerproc,s)` and then does `result:=tprocdef(tprocsym(srsym).procdeflist[0])`. If `srsym` is nil, that dereferences nil. So we never “return nil” safely; we either get a procdef or we error and then crash. So if we ever call `g_local_unwind` in a context where `_fpc_local_unwind` isn’t in the system unit yet, we’d get a compiler error/crash.
+
+---
+
+## 5. Recommendations
+
+1. **Get the real failure:** Run the same `make crossinstall` locally (same env: CPU_TARGET=aarch64, OS_TARGET=win64, FPC, BINUTILSPREFIX, CROSSOPT, INSTALL_PREFIX) or open the failed job log when signed in. The last 20–50 lines usually show the actual error (e.g. “Error: unknown compilerproc” or a make recipe failure).
+2. **Optional defensive guard:** In `tcgaarch64.g_local_unwind`, if we want to harden against “system proc not found” (e.g. during weird RTL build order), we could add:  
+   `if not assigned(pd) then begin inherited g_local_unwind(list, l); exit; end;`  
+   after `pd := search_system_proc('_fpc_local_unwind');`  
+   But `search_system_proc` doesn’t return nil today — it messages and then dereferences, so we’d only get this if FPC is changed to return nil. So this is optional.
+3. **CI: preserve log on failure:** Add a step that runs on failure and dumps the last N lines of the build log (or uploads the log as an artifact) so we can see the exact error without signing in.
+4. **Docs:** Keep next-steps-detailed.md and the analysis docs as-is; they correctly describe the fix and that `_fpc_local_unwind` is present for aarch64. Add a short “CI: Cross-install failure” note in next-steps pointing to this review and to “get the job log / run make crossinstall locally”.
+
+---
+
+## 6. Root cause (from log)
+
+**Actual error (from user-provided log):**
+```
+sysutils.pp(659,7) Fatal: Unknown compilerproc "_fpc_local_unwind". Check if you use the correct run time library.
+```
+
+- **What happens:** When compiling **rtl/win/sysutils.pp** (line 659 = `exit` inside try...finally), the backend calls `search_system_proc('_fpc_local_unwind')`. The system unit (system.ppu) is loaded, but **`_fpc_local_unwind` is not in the .ppu**.
+- **Why:** FPC only writes **registered** (i.e. "used") symbols to the .ppu. When the **system** unit is compiled, nothing in it references `_fpc_local_unwind`; only other units (e.g. sysutils) need it when they use try...finally+exit. So the procsym was never registered and never written to system.ppu.
+- **Fix (RTL):** In **rtl/win64/seh64.inc**, add a constant that references `@_fpc_local_unwind` so the symbol is used when compiling the system unit and thus registered and written to system.ppu. Then backends that call `search_system_proc('_fpc_local_unwind')` when compiling sysutils (or any unit with try...finally+exit) will find it.
+
+## 7. Short summary
+
+| Question | Answer |
+|----------|--------|
+| Is the g_local_unwind fix correct? | Yes; docs and analysis agree. |
+| Is `_fpc_local_unwind` there for aarch64? | Yes; in rtl/win64/seh64.inc, no CPU guard. |
+| Why did CI fail at Cross-install? | sysutils.pp(659) Fatal: Unknown compilerproc "_fpc_local_unwind". |
+| Root cause | Only if some compiled code (e.g. RTL) triggers `g_local_unwind` before `_fpc_local_unwind` is visible; seh64.inc did not’t have try...finally+exit, so not obviously. |
+| Fix | Add a constant in seh64.inc that references `@_fpc_local_unwind` so it gets registered and exported in system.ppu. |
