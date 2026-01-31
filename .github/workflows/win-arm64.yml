@@ -92,13 +92,25 @@ jobs:
             -o"$GITHUB_WORKSPACE/docs/phase2-tests/trap.exe" \
             docs/phase2-tests/trap.pas
 
-      - name: Upload arm64 executables
+      - name: Build native ppca64 (Phase 3)
+        run: |
+          make -C compiler compiler -j4 \
+            FPC="$GITHUB_WORKSPACE/compiler/ppcrossa64" \
+            OS_TARGET=win64 \
+            CPU_TARGET=aarch64 \
+            BINUTILSPREFIX=aarch64-w64-mingw32- \
+            OPT="-FD$RUNNER_TEMP/llvm-mingw/bin"
+        env:
+          PATH: "/usr/bin:/usr/local/bin:$RUNNER_TEMP/llvm-mingw/bin:$PATH"
+
+      - name: Upload arm64 executables and ppca64
         uses: actions/upload-artifact@v4
         with:
           name: phase2-arm64-exes
           path: |
             docs/phase2-tests/hello.exe
             docs/phase2-tests/trap.exe
+            compiler/ppca64
 
   test-windows-arm64:
     name: Run on Windows arm64
@@ -124,5 +136,17 @@ jobs:
             exit 1
           }
           Write-Host "OK: $out"
+          exit 0
+        shell: pwsh
+
+      - name: Verify ppca64 (Phase 3 native compiler)
+        run: |
+          $ppc = if (Test-Path compiler\ppca64) { 'compiler\ppca64' } else { 'ppca64' }
+          $ver = & $ppc -iV 2>&1 | Out-String
+          Write-Host "ppca64 -iV: $ver"
+          if (-not $ver -or $LASTEXITCODE -ne 0) {
+            Write-Error "ppca64 -iV failed: $ver"
+            exit 1
+          }
           exit 0
         shell: pwsh
