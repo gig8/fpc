@@ -278,8 +278,20 @@ So: **Phase 3 → get ppca64.exe. Phase 4 → run make cycle with it on Windows 
 1. [x] Confirm Phase 1 checkpoints (ppcrossa64 + units).
 2. [x] Run Phase 2.1–2.3 (hello, objdump, trap + .s inspection).
 3. [x] Run hello/trap on Windows arm64 (CI: GitHub Actions `windows-11-arm`); trap passed (“Caught: The Unwind Trap”).
-4. [ ] **Next:** Phase 3 – build native Windows arm64 compiler (ppca64.exe) with ppcrossa64; document exact command.
+4. [ ] **Next:** Phase 3 – build native Windows arm64 compiler (ppca64.exe) with ppcrossa64; get CI fully green (staging + Bounty Boss + ppca64 verify).
 5. [ ] Set up Windows arm64 environment for Phase 4 (CI already has `windows-11-arm`; can use for cycle when we have ppca64.exe).
+
+---
+
+## Bounty launch to-do (once CI is green)
+
+Strategy: **Public–Private multi-stage launch** (see `docs/gemini-conversation-summary.md`). Order: Proof of Life (public) → Dark Byte (strategic) → Formal bounty (financial).
+
+- [ ] **CI green:** Action passes (hello, trap, arm64trap/Bounty Boss, ppca64 verify). Pull artifact (arm64-exes), run Arm64Trap.exe locally if desired; capture screen/video.
+- [ ] **Stage 1 – Proof of Life:** Post to Lazarus/FPC Windows/Arm64 forum: “Stabilized AArch64-Win64 with llvm-mingw; SEH and try...finally clearing. GitHub Action logs available.”
+- [ ] **Stage 2 – Dark Byte:** Open “Arm64 Support” issue or targeted message on Cheat Engine GitHub; offer to test FPC Arm64 against CE codebase for driver-level exceptions.
+- [ ] **Stage 3 – Formal bounty:** Submit patch to FPC GitLab with short report (before/after assembly, stack alignment, .pdata compliance); request $10k.
+- [ ] **If CI is red:** Get the Fatal (or first real) error from the failed step; fix linker flags (e.g. **-Fl** path) or missing mingw lib; re-run and re-check logs.
 
 ---
 

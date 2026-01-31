@@ -105,3 +105,44 @@ If you compile this with ppcrossa64 (or ppca64) and run on Arm64, and you see **
 - Most claimants are on messy local setups. We use **GitHub Actions + llvm-mingw** for **reproducible proof**: "Here is the build, here is the test result, and here is the generated assembly with corrected .pdata." That makes us the authority, not just a claimant.
 - If the Action fails at **Link** stage → likely missing **-Fl** path to LLVM-MinGW libs.
 - If it fails at **Compile** stage → paste the log; likely a missing header in the RTL.
+
+---
+
+## Strategic launch: Public–Private multi-stage (Gemini)
+
+**Goal:** Maximize leverage. Don’t dump the fix publicly (lose seat at table). Don’t only hold for bounty (miss networking with “power users” like Dark Byte). Use a **multi-stage launch**.
+
+### Stage 1: Proof of Life (Public)
+
+- **When:** Once the GitHub Action is green and you have a working **Arm64Trap.exe** (try...finally test).
+- **Action:** Record a short video/screen capture of it running on an Arm64 machine (or WSL2 Arm64).
+- **Where:** Post to the Lazarus/FPC Windows/Arm64 forum thread.
+- **Message:** “I’ve stabilized the AArch64-Win64 backend using an llvm-mingw toolchain. Exception handling (SEH) and try...finally blocks are now clearing correctly. GitHub Action logs available.”
+- **Why:** Stakes your claim as first to solve it; starts the clock on the $10k bounty claim.
+
+### Stage 2: Direct line to Dark Byte (Strategic)
+
+- **Don’t** only “inform” Dark Byte on a public channel.
+- **Do:** Send a targeted message or open a specific “Arm64 Support” issue on the **Cheat Engine GitHub**.
+- **Pitch:** “I have a working FPC Arm64 compiler that solves the SEH/Alignment crashes. I’m preparing the patch for the FPC trunk, but I’d like to test it against the CE codebase to ensure the driver-level exceptions are handled.”
+- **Why:** Dark Byte is strong on low-level Windows internals. His endorsement is ultimate validation; the FPC Foundation is more likely to pay out quickly if he validates the fix.
+
+### Stage 3: Formal bounty submission (Financial)
+
+- **Where:** Submit your patch to the **FPC GitLab** (core team).
+- **Polish:** Don’t just send code. Send a short report (e.g. PDF) showing before/after assembly of stack frames, how the fix aligns the stack to 16 bytes, and how the .pdata records are now Windows-compliant.
+- **Bounty:** This is where you officially request the $10,000.
+
+### Why this order?
+
+- Bounty first → corporate side may take months to verify.
+- Forums + Dark Byte first → community pressure speeds up the foundation; you become the “community hero” (leads to consulting/visibility later).
+
+### AI / documentation
+
+- Use Cursor/LLMs to generate **clean, professional documentation** for the patch. The FPC core team is known for caring a lot about documentation; a clear, well-explained diff reduces friction.
+
+### Current status check
+
+- **If the GitHub Action is green:** Pull the binary (e.g. from the artifact), run the Trap test locally, then proceed to Stage 1 (Proof of Life post).
+- **If it’s red:** Get the **Fatal** (or first real) error from the failed step; that usually identifies the missing mingw library or linker flag (e.g. **-Fl** path). Check the logs together and fix the step.

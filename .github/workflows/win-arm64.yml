@@ -3,7 +3,7 @@
 #
 # Cache invalidation: if you change something that affects a build output, update that cache's key.
 # - llvm-mingw: key = LLVM_MINGW_RELEASE (+ runner). Change env.LLVM_MINGW_RELEASE to force re-download.
-# - FPC cross-build: key = hash(compiler/**, rtl/**, packages/**, Makefile*). Add any new dir/file that affects crossinstall or ppca64.
+# - FPC cross-build: key = hash(...)-v2 (bump -v2 to force miss if cache was saved without ppca64). Add any new dir/file that affects crossinstall or ppca64.
 # - msgtxt: key = hash(compiler/msg/error*.msg). Add any msg file that feeds msg2inc.
 
 name: Windows arm64
@@ -56,6 +56,9 @@ jobs:
           tar -xf "$RUNNER_TEMP/llvm-mingw.tar.xz" -C "$RUNNER_TEMP/llvm-mingw" --strip-components=1
           "$RUNNER_TEMP/llvm-mingw/bin/aarch64-w64-mingw32-clang" --version
 
+      # Cache key includes -v2: old caches were saved without compiler/ppca64 in path,
+      # so a "hit" restored no ppca64 and we skipped building it. Bump key to force miss
+      # until we have a green run that saves a complete cache (with ppca64).
       - name: Cache FPC cross-build (ppcrossa64 + aarch64-win64 units + ppca64)
         id: cache_fpc
         uses: actions/cache@v4
@@ -64,7 +67,20 @@ jobs:
             compiler/ppcrossa64
             compiler/ppca64
             ${{ runner.temp }}/fpc_install
-          key: fpc-aarch64-win64-${{ runner.os }}-${{ hashFiles('compiler/**', 'rtl/**', 'packages/**', 'Makefile', 'Makefile.fpc') }}
+          key: fpc-aarch64-win64-${{ runner.os }}-${{ hashFiles('compiler/**', 'rtl/**', 'packages/**', 'Makefile', 'Makefile.fpc') }}-v2
+
+      - name: Verify FPC cache contents (when cache hit)
+        if: steps.cache_fpc.outputs.cache-hit == 'true'
+        run: |
+          missing=""
+          [ -f "$GITHUB_WORKSPACE/compiler/ppcrossa64" ] || missing="$missing compiler/ppcrossa64"
+          [ -f "$GITHUB_WORKSPACE/compiler/ppca64" ] || missing="$missing compiler/ppca64"
+          [ -d "$RUNNER_TEMP/fpc_install/lib/fpc/${{ env.FPC_VERSION }}/units/aarch64-win64" ] || missing="$missing fpc_install/.../units/aarch64-win64"
+          if [ -n "$missing" ]; then
+            echo "::error::FPC cache incomplete (missing:$missing). Bump cache key suffix (-v2 -> -v3) in the workflow to force a fresh build."
+            exit 1
+          fi
+          echo "FPC cache OK: ppcrossa64, ppca64, fpc_install present."
 
       - name: Cross-install FPC aarch64-win64
         if: steps.cache_fpc.outputs.cache-hit != 'true'

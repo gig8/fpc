@@ -101,6 +101,17 @@ Starting with (2) is enough to “setup the CI arm64 test”; (1) can be added l
 
 ---
 
+## Caching best practices (win-arm64 workflow)
+
+- **Key = inputs that affect the output.** Each cache key must include everything that affects the cached paths (e.g. source hash for FPC, release id for llvm-mingw). See comments at top of `win-arm64.yml`.
+- **Bump key when cache structure changes.** If you add/remove paths in the cache (e.g. we added `compiler/ppca64`), bump a suffix in the key (e.g. `-v2` → `-v3`) so old caches (saved without that path) are not restored. Otherwise you get a “hit” but missing files.
+- **Verify after restore.** When a cache hit skips a build step, verify that the restored paths actually contain the expected files. The workflow has a “Verify FPC cache contents” step that runs only on cache hit and fails if `ppcrossa64`, `ppca64`, or `fpc_install/.../units/aarch64-win64` are missing.
+- **No restore-keys for FPC.** We use an exact key (source hash + suffix) so we don’t restore a stale compiler/RTL. Partial matches would risk wrong binaries.
+- **Cache is saved only on job success.** If the job fails (e.g. at staging), the cache is not updated. Fix the failure and get a green run so the cache is written once with the full set of paths.
+- **Document invalidation in the workflow.** The top-of-file comments list what each key depends on and when to bump it.
+
+---
+
 ## Checklist (CI arm64 setup)
 
 - [x] Create GitHub repo (`github.com/gig8/fpc`)
