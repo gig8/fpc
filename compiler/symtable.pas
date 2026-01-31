@@ -4423,8 +4423,7 @@ implementation
       begin
         check_systemunit_loaded;
         srsym:=tsym(systemunit.find(s));
-        if not assigned(srsym) and
-           (cs_compilesystem in current_settings.moduleswitches) then
+        if not assigned(srsym) then
           srsym:=tsym(systemunit.Find(upper(s)));
         if not assigned(srsym) or
            (srsym.typ<>procsym) then

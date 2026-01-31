@@ -56,7 +56,7 @@ jobs:
           tar -xf "$RUNNER_TEMP/llvm-mingw.tar.xz" -C "$RUNNER_TEMP/llvm-mingw" --strip-components=1
           "$RUNNER_TEMP/llvm-mingw/bin/aarch64-w64-mingw32-clang" --version
 
-      # Cache key: bump -v4 so ppcrossa64 is rebuilt with compiler fix (register on @proc).
+      # Cache key: bump -v5 so ppcrossa64 is rebuilt with compiler fix (fppu upper fallback for _fpc_local_unwind).
       - name: Cache FPC cross-build (ppcrossa64 + aarch64-win64 units + ppca64)
         id: cache_fpc
         uses: actions/cache@v4
@@ -65,7 +65,7 @@ jobs:
             compiler/ppcrossa64
             compiler/ppca64
             ${{ runner.temp }}/fpc_install
-          key: fpc-aarch64-win64-${{ runner.os }}-${{ hashFiles('compiler/**', 'rtl/**', 'packages/**', 'Makefile', 'Makefile.fpc') }}-v4
+          key: fpc-aarch64-win64-${{ runner.os }}-${{ hashFiles('compiler/**', 'rtl/**', 'packages/**', 'Makefile', 'Makefile.fpc') }}-v5
 
       - name: Verify FPC cache contents (when cache hit)
         if: steps.cache_fpc.outputs.cache-hit == 'true'
@@ -75,7 +75,7 @@ jobs:
           [ -f "$GITHUB_WORKSPACE/compiler/ppca64" ] || missing="$missing compiler/ppca64"
           [ -d "$RUNNER_TEMP/fpc_install/lib/fpc/${{ env.FPC_VERSION }}/units/aarch64-win64" ] || missing="$missing fpc_install/.../units/aarch64-win64"
           if [ -n "$missing" ]; then
-            echo "::error::FPC cache incomplete (missing:$missing). Bump cache key suffix (-v4 -> -v5) in the workflow to force a fresh build."
+            echo "::error::FPC cache incomplete (missing:$missing). Bump cache key suffix (-v5 -> -v6) in the workflow to force a fresh build."
             exit 1
           fi
           echo "FPC cache OK: ppcrossa64, ppca64, fpc_install present."

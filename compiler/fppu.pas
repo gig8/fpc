@@ -143,7 +143,7 @@ uses
   SysUtils,
   cfileutl,
   systems,version,options,
-  symtable, symsym,
+  symconst,symtable,symsym,
   wpoinfo,
   scanner,
   aasmbase,ogbase,
@@ -1647,8 +1647,6 @@ var
 
 
     procedure tppumodule.writeppu;
-      var
-        srsym : tsym;
       begin
          Message1(unit_u_ppu_write,realmodulename^);
 
@@ -1787,18 +1785,6 @@ var
          writederefdata;
 
          ppufile.writeentry(ibendinterface);
-
-         { win64 system unit: ensure _fpc_local_unwind is registered so it is
-           written to the .ppu (backends look it up via search_system_proc when
-           compiling units with try...finally+exit). Belt-and-suspenders with
-           pexpr.pas register-on-@proc. }
-         if (cs_compilesystem in current_settings.moduleswitches) and
-            (target_info.system in [system_x86_64_win64,system_aarch64_win64]) then
-           begin
-             srsym:=tsym(globalsymtable.find('_fpc_local_unwind'));
-             if assigned(srsym) and (srsym.typ=procsym) and (srsym is tstoredsym) then
-               tstoredsym(srsym).register_sym;
-           end;
 
          { write the symtable entries }
          tstoredsymtable(globalsymtable).ppuwrite(ppufile);
