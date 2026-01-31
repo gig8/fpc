@@ -94,32 +94,46 @@ jobs:
         env:
           PATH: "/usr/bin:/usr/local/bin:$RUNNER_TEMP/llvm-mingw/bin:$PATH"
 
-      # After crossinstall, ppcrossa64 lives in fpc_install/bin/; copy to compiler/ so Phase 2 compile finds it.
+      # FPC install puts cross-compiler in INSTALL_BINDIR/$(SOURCESUFFIX), e.g. fpc_install/bin/x86_64-linux/ppcrossa64.
+      # Find it anywhere under fpc_install and copy to compiler/ so Phase 2 compile and cache find it.
       - name: Ensure ppcrossa64 at compiler/ for Phase 2 compile
         if: steps.cache_fpc.outputs.cache-hit != 'true'
         run: |
           D="$GITHUB_WORKSPACE"
           INST="$RUNNER_TEMP/fpc_install"
-          if [ -f "$INST/bin/ppcrossa64" ] && [ ! -f "$D/compiler/ppcrossa64" ]; then
-            cp "$INST/bin/ppcrossa64" "$D/compiler/ppcrossa64"
-            chmod +x "$D/compiler/ppcrossa64"
-            echo "Copied ppcrossa64 from fpc_install/bin to compiler/"
+          FOUND=""
+          if [ -f "$D/compiler/ppcrossa64" ]; then
+            FOUND="$D/compiler/ppcrossa64"
+          else
+            FOUND=$(find "$INST" -name ppcrossa64 -type f 2>/dev/null | head -1)
+            if [ -n "$FOUND" ] && [ -f "$FOUND" ]; then
+              cp "$FOUND" "$D/compiler/ppcrossa64"
+              chmod +x "$D/compiler/ppcrossa64"
+              echo "Copied ppcrossa64 from $FOUND to compiler/"
+            else
+              echo "::warning::ppcrossa64 not found under $INST (crossinstall may have failed)"
+            fi
           fi
-          for cand in "$D/compiler/ppcrossa64" "$INST/bin/ppcrossa64"; do
-            if [ -f "$cand" ]; then echo "ppcrossa64 at: $cand"; break; fi
-          done
+          [ -n "$FOUND" ] && echo "ppcrossa64 at: $FOUND"
 
       - name: Compile Phase 2 tests
         run: |
           set -e
           D="$GITHUB_WORKSPACE"
-          UP="$RUNNER_TEMP/fpc_install/lib/fpc/${{ env.FPC_VERSION }}/units/aarch64-win64"
+          INST="$RUNNER_TEMP/fpc_install"
+          UP="$INST/lib/fpc/${{ env.FPC_VERSION }}/units/aarch64-win64"
+          PPC=""
           if [ -f "$D/compiler/ppcrossa64" ]; then
             PPC="$D/compiler/ppcrossa64"
-          elif [ -f "$RUNNER_TEMP/fpc_install/bin/ppcrossa64" ]; then
-            PPC="$RUNNER_TEMP/fpc_install/bin/ppcrossa64"
           else
-            echo "::error::ppcrossa64 not found in compiler/ or fpc_install/bin/"
+            PPC=$(find "$INST" -name ppcrossa64 -type f 2>/dev/null | head -1)
+          fi
+          if [ -z "$PPC" ] || [ ! -f "$PPC" ]; then
+            echo "::error::ppcrossa64 not found in compiler/ or under fpc_install (FPC installs to bin/SOURCESUFFIX/, e.g. bin/x86_64-linux/)"
+            exit 1
+          fi
+          if [ ! -d "$UP" ]; then
+            echo "::error::RTL units dir missing: $UP (crossinstall may have failed)"
             exit 1
           fi
           export PATH="$RUNNER_TEMP/llvm-mingw/bin:$PATH"

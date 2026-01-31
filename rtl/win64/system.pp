@@ -424,6 +424,7 @@ function CheckInitialStkLen(stklen : SizeUInt) : SizeUInt;
   end;
 
 initialization
+  fpc_local_unwind_export_ref := @_fpc_local_unwind;
   { pass dummy value }
   StackLength := CheckInitialStkLen($1000000);
   StackBottom := StackTop - StackLength;
