@@ -82,6 +82,7 @@ jobs:
 
       - name: Compile Phase 2 tests
         run: |
+          set -e
           PPC="$GITHUB_WORKSPACE/compiler/ppcrossa64"
           UP="$RUNNER_TEMP/fpc_install/lib/fpc/${{ env.FPC_VERSION }}/units/aarch64-win64"
           export PATH="$RUNNER_TEMP/llvm-mingw/bin:$PATH"
@@ -145,12 +146,22 @@ jobs:
 
       - name: Stage and upload arm64 executables and ppca64
         run: |
-          mkdir -p "$GITHUB_WORKSPACE/arm64-exes"
-          cp "$GITHUB_WORKSPACE/docs/phase2-tests/hello.exe" "$GITHUB_WORKSPACE/arm64-exes/"
-          cp "$GITHUB_WORKSPACE/docs/phase2-tests/trap.exe" "$GITHUB_WORKSPACE/arm64-exes/"
-          cp "$GITHUB_WORKSPACE/docs/phase2-tests/arm64trap.exe" "$GITHUB_WORKSPACE/arm64-exes/"
-          cp "$GITHUB_WORKSPACE/compiler/ppca64" "$GITHUB_WORKSPACE/arm64-exes/"
-          ls -la "$GITHUB_WORKSPACE/arm64-exes/"
+          set -e
+          D="$GITHUB_WORKSPACE"
+          mkdir -p "$D/arm64-exes"
+          cp "$D/docs/phase2-tests/hello.exe" "$D/arm64-exes/"
+          cp "$D/docs/phase2-tests/trap.exe" "$D/arm64-exes/"
+          if [ -f "$D/docs/phase2-tests/arm64trap.exe" ]; then
+            cp "$D/docs/phase2-tests/arm64trap.exe" "$D/arm64-exes/"
+          elif [ -f "$D/docs/phase2-tests/arm64trap" ]; then
+            cp "$D/docs/phase2-tests/arm64trap" "$D/arm64-exes/arm64trap.exe"
+          else
+            echo "Missing arm64trap (expected arm64trap.exe or arm64trap in docs/phase2-tests/)"
+            ls -la "$D/docs/phase2-tests/"
+            exit 1
+          fi
+          cp "$D/compiler/ppca64" "$D/arm64-exes/" || { echo "Missing compiler/ppca64"; ls -la "$D/compiler/ppca64" 2>/dev/null || true; exit 1; }
+          ls -la "$D/arm64-exes/"
 
       - name: Upload arm64 executables and ppca64
         uses: actions/upload-artifact@v4
