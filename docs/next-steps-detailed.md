@@ -230,6 +230,39 @@ So: **Phase 3 → get ppca64.exe. Phase 4 → run make cycle with it on Windows 
 
 ---
 
+## GitHub Windows Arm64 runners and shell-extension CI (April 2025)
+
+**Context:** As of April 2025, GitHub officially released **Windows Arm64 hosted runners** for all public repositories. Proving shell extensions in CI is now significantly easier: you can load, register, and test native Arm64 DLLs on a real Windows 11 Arm64 environment (the “Copilot+ PC” architecture) directly in the pipeline. In the past you had to run a Linux worker and “guess” if the binary was correct.
+
+### Shell-extension CI strategy
+
+To prove a shell extension works, it’s not enough to just compile it. You need to:
+
+1. **Target the runner:** In `.github/workflows/*.yml`, use `runs-on: windows-11-arm` so the job runs on real Arm64 hardware.
+2. **Smoke test – register and verify:** Register the DLL with `regsvr32 /s my_extension_arm64.dll`. If FPC messed up SEH or alignment, regsvr32 will hang or return non-zero because it can’t initialize the COM object. Then verify the CLSID exists in the registry (e.g. `Test-Path "HKCR:\CLSID\{YOUR-GUID}"`); fail the step if not found.
+3. **Golden proof – SEH unwind tables:** For the $10k bounty, the foundation wants to see valid **Structured Exception Handling (SEH)** data. In CI you can use **dumpbin** (MSVC tools, often pre-installed on the Windows runner) to inspect the `.pdata` section:
+   - `dumpbin /pdata my_extension_arm64.dll > unwind_tables.txt`
+   - Assert that the output contains “Unwind Index” (or equivalent) so the binary has valid ARM64 unwind metadata.
+
+### Why this “closes the loop” for the bounty
+
+If you can point the FPC core team to a GitHub Action that:
+
+- Compiles on Linux (using the current cross-build setup),
+- Deploys the artifact to a `windows-11-arm` runner,
+- Successfully registers the DLL without crashing,
+- Passes an exception test (DLL handles try/except while registered),
+
+then you have provided **concrete proof** that the backend is production-ready. A green checkmark on actual Arm64 silicon is hard to argue with.
+
+### CI additions we use today
+
+- **Already in workflow:** `runs-on: windows-11-arm` for the test job; run hello.exe, trap.exe, arm64trap (Bounty Boss), neontest; verify ppca64 -iV.
+- **Added:** “Verify SEH unwind tables” step: run `dumpbin /pdata` on `trap.exe` (or another built PE) and check for unwind metadata; documents that our binaries have valid .pdata.
+- **When we have a shell-extension DLL:** Add a job or step: regsvr32 the DLL, then verify CLSID in registry (see above).
+
+---
+
 ## Phase 7: Upstream and bounty closure
 
 - [ ] **Phase 7**

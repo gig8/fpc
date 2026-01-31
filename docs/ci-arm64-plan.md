@@ -8,10 +8,14 @@
 
 | Platform        | Windows arm64 hosted runner | Notes |
 |-----------------|-----------------------------|--------|
-| **GitHub Actions** | Yes (GA / public preview 2025) | Label `windows-11-arm`, free for public repos. Native arm64, no QEMU. |
+| **GitHub Actions** | Yes (officially GA April 2025) | Label `windows-11-arm`, free for public repos. Native arm64 (real Copilot+ PC–class hardware), no QEMU. |
 | **GitLab.com**     | No                           | Windows hosted = `saas-windows-medium-amd64` only. GitLab Dedicated has arm64, not GitLab.com. |
 
-**Conclusion:** For **running** Windows arm64 binaries in CI we use **GitHub Actions**. GitLab CI can still do Linux jobs (e.g. cross-build on Linux for aarch64-win64).
+**Conclusion:** For **running** Windows arm64 binaries in CI we use **GitHub Actions**. You can load, register, and test native Arm64 DLLs (e.g. shell extensions) on the runner; no more “guessing” from a Linux-built binary. GitLab CI can still do Linux jobs (e.g. cross-build on Linux for aarch64-win64).
+
+### Shell-extension CI (when we have a DLL)
+
+To prove a shell extension works in CI: (1) Use `runs-on: windows-11-arm`. (2) Register with `regsvr32 /s my_extension_arm64.dll` and verify the CLSID in the registry—if SEH/alignment is wrong, regsvr32 will hang or fail. (3) Use `dumpbin /pdata` (MSVC, often on the runner) to verify the binary has valid ARM64 unwind tables. See **docs/next-steps-detailed.md** § “GitHub Windows Arm64 runners and shell-extension CI (April 2025)”.
 
 ---
 

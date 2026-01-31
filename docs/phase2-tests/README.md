@@ -30,6 +30,9 @@ aarch64-w64-mingw32-objdump -p hello.exe
 # Bounty Boss (try...finally + exit – local unwind)
 "$PPC" -Twin64 -XPaarch64-w64-mingw32- -Fu"$UP/rtl" -Fu"$UP/rtl-objpas" -FE. -FD/opt/llvm-mingw/bin -oarm64trap.exe arm64trap.pas
 
+# NEON vector test (SIMD – ld1/fadd/st1, register pressure, alignment)
+"$PPC" -Twin64 -XPaarch64-w64-mingw32- -Fu"$UP/rtl" -Fu"$UP/rtl-objpas" -FE. -FD/opt/llvm-mingw/bin -oneontest.exe neontest.pas
+
 # Emit assembly for SEH inspection
 "$PPC" -Twin64 -XPaarch64-w64-mingw32- -Fu"$UP/rtl" -Fu"$UP/rtl-objpas" -FE. -FD/opt/llvm-mingw/bin -a trap.pas
 # Then inspect trap.s for .pdata, .xdata, unwind, __FPC_specific_handler
@@ -41,3 +44,4 @@ aarch64-w64-mingw32-objdump -p hello.exe
 - **trap.exe:** Built; `trap.s` contains `.pdata` and `.xdata` with unwind info; `main` has `__FPC_specific_handler` and exception handler table.
 - **Runtime:** Run `hello.exe` and `trap.exe` on Windows arm64 (or QEMU/CI) to confirm trap prints "Caught: The Unwind Trap".
 - **arm64trap.exe (Bounty Boss):** try...finally + exit; must print "Success: Finally block executed!" and "Done." – tests local unwind /.pdata (foundation payout test).
+- **neontest.exe (NEON/SIMD):** 128-bit vector add (4× Single); must print "Result: PASS (SIMD alignment and execution successful)" – validates SIMD register allocation, alignment, inline asm with llvm-mingw.
