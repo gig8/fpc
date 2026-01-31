@@ -1,5 +1,5 @@
 # Windows arm64 CI – cross-build on Linux, run hello.exe/trap.exe on Windows arm64.
-# See docs/ci-arm64-plan.md.
+# Caches: llvm-mingw (by release), FPC cross-build (by compiler/rtl/packages hash). See docs/ci-arm64-plan.md.
 
 name: Windows arm64
 
@@ -28,16 +28,37 @@ jobs:
           sudo apt-get install -y fpc
           fpc -iV
 
+      - name: Cache llvm-mingw
+        id: cache_llvm
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/llvm-mingw
+          key: llvm-mingw-${{ env.LLVM_MINGW_RELEASE }}-ubuntu-22.04
+
+      - name: Set llvm-mingw env
+        run: |
+          echo "LLVM_MINGW=$RUNNER_TEMP/llvm-mingw" >> $GITHUB_ENV
+          echo "$RUNNER_TEMP/llvm-mingw/bin" >> $GITHUB_PATH
+
       - name: Install llvm-mingw
+        if: steps.cache_llvm.outputs.cache-hit != 'true'
         run: |
           mkdir -p "$RUNNER_TEMP/llvm-mingw"
           curl -sL "https://github.com/mstorsjo/llvm-mingw/releases/download/${{ env.LLVM_MINGW_RELEASE }}/${{ env.LLVM_MINGW_ARCHIVE }}" -o "$RUNNER_TEMP/llvm-mingw.tar.xz"
           tar -xf "$RUNNER_TEMP/llvm-mingw.tar.xz" -C "$RUNNER_TEMP/llvm-mingw" --strip-components=1
-          echo "LLVM_MINGW=$RUNNER_TEMP/llvm-mingw" >> $GITHUB_ENV
-          echo "$RUNNER_TEMP/llvm-mingw/bin" >> $GITHUB_PATH
           "$RUNNER_TEMP/llvm-mingw/bin/aarch64-w64-mingw32-clang" --version
 
+      - name: Cache FPC cross-build (ppcrossa64 + aarch64-win64 units)
+        id: cache_fpc
+        uses: actions/cache@v4
+        with:
+          path: |
+            compiler/ppcrossa64
+            ${{ runner.temp }}/fpc_install
+          key: fpc-aarch64-win64-${{ runner.os }}-${{ hashFiles('compiler/**', 'rtl/**', 'packages/**', 'Makefile', 'Makefile.fpc') }}
+
       - name: Cross-install FPC aarch64-win64
+        if: steps.cache_fpc.outputs.cache-hit != 'true'
         run: |
           make crossinstall -j$(nproc) \
             CPU_TARGET=aarch64 \
