@@ -143,7 +143,7 @@ uses
   SysUtils,
   cfileutl,
   systems,version,options,
-  symtable, symsym,
+  symconst,symtable,symsym,
   wpoinfo,
   scanner,
   aasmbase,ogbase,

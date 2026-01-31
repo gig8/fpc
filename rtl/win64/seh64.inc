@@ -411,7 +411,15 @@ procedure _fpc_local_unwind(frame,target: Pointer);[public,alias:'_FPC_local_unw
 var
   ctx: TContext;
 begin
+  {$ifdef FPC_DEBUG_WIN64_UNWIND}
+  if IsConsole then
+    writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND] _fpc_local_unwind ENTER frame=$',hexstr(PtrUInt(frame),16),' target=$',hexstr(PtrUInt(target),16));
+  {$endif FPC_DEBUG_WIN64_UNWIND}
   RtlUnwindEx(frame,target,nil,nil,@ctx,nil);
+  {$ifdef FPC_DEBUG_WIN64_UNWIND}
+  if IsConsole then
+    writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND] _fpc_local_unwind EXIT (returned from RtlUnwindEx)');
+  {$endif FPC_DEBUG_WIN64_UNWIND}
 end;
 {$pop}
 

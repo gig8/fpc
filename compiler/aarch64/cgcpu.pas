@@ -105,6 +105,7 @@ interface
         procedure g_adjust_self_value(list: TAsmList; procdef: tprocdef; ioffset: tcgint);override;
         procedure g_check_for_fpu_exception(list: TAsmList; force, clear: boolean);override;
         procedure g_profilecode(list: TAsmList);override;
+        procedure g_local_unwind(list: TAsmList; l: TAsmLabel);override;
        private
         function save_regs(list: TAsmList; rt: tregistertype; lowsr, highsr: tsuperregister; sub: tsubregister): longint;
         procedure load_regs(list: TAsmList; rt: tregistertype; lowsr, highsr: tsuperregister; sub: tsubregister);
@@ -2203,6 +2204,37 @@ implementation
             tcpuprocinfo(current_procinfo).dump_scopes(list);
             list.concat(cai_seh_directive.create(ash_endproc));
           end;
+      end;
+
+
+    procedure tcgaarch64.g_local_unwind(list: TAsmList; l: TAsmLabel);
+      var
+        para1, para2: tcgpara;
+        href: treference;
+        pd: tprocdef;
+      begin
+        { Only aarch64-win64 uses SEH; for other targets a plain jump is correct. }
+        if (target_info.system <> system_aarch64_win64) then
+          begin
+            inherited g_local_unwind(list, l);
+            exit;
+          end;
+        { Call RTL _FPC_local_unwind(frame, target) so the OS runs finally blocks
+          during unwind (RtlUnwindEx). Without this, try...finally + exit would
+          just JMP to finally and never run the unwinder → wrong behaviour. }
+        pd := search_system_proc('_fpc_local_unwind');
+        para1.init;
+        para2.init;
+        paramanager.getcgtempparaloc(list, pd, 1, para1);
+        paramanager.getcgtempparaloc(list, pd, 2, para2);
+        reference_reset_symbol(href, l, 0, 1, []);
+        a_load_reg_cgpara(list, OS_ADDR, NR_STACK_POINTER_REG, para1);
+        a_loadaddr_ref_cgpara(list, href, para2);
+        paramanager.freecgpara(list, para2);
+        paramanager.freecgpara(list, para1);
+        a_call_name(list, '_FPC_local_unwind', false);
+        para2.done;
+        para1.done;
       end;
 
 

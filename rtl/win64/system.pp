@@ -49,6 +49,12 @@ interface
 { include common windows headers }
 {$I syswinh.inc}
 
+{$ifdef SYSTEM_USE_WIN_SEH}
+{ Forward so _fpc_local_unwind is in globalsymtable and written to system.ppu;
+  backends look it up via search_system_proc. Body in seh64.inc. }
+procedure _fpc_local_unwind(frame,target: Pointer); compilerproc;
+{$endif SYSTEM_USE_WIN_SEH}
+
 var
   MainInstance : qword;
 
