@@ -116,6 +116,8 @@ Starting with (2) is enough to “setup the CI arm64 test”; (1) can be added l
 
 **ppca64 vs ppca64.exe:** We want the Windows runner to get **ppca64.exe** so `ppca64.exe -iV` works reliably (output and exit code). Make produces the native Windows compiler as `ppca64` (no extension). We cache it as `compiler/ppca64`. For the artifact we stage it as **ppca64.exe** so the Windows job runs `ppca64.exe -iV`.
 
+**Bounty Boss and ppca64: run both, then fail (Jan 2026).** We run Bounty Boss (arm64trap try...finally+exit) and Verify ppca64 (ppca64 -iV) without failing on the first failure; we fail at the end if either failed so we see both results and can test whether they’re related. See **docs/next-steps-detailed.md** § “CI: run both Bounty Boss and ppca64, then fail if either failed”.
+
 ---
 
 ## Checklist (CI arm64 setup)

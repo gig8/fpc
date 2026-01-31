@@ -423,8 +423,9 @@ jobs:
           exit 0
         shell: pwsh
 
-      # Bounty Boss first: try...finally + exit (strictest SEH/local unwind).
+      # Bounty Boss first: try...finally + exit. Keep going on failure so we run Verify ppca64 too.
       - name: Run Bounty Boss test (try...finally + exit)
+        id: bounty_boss
         run: |
           Set-Location $env:GITHUB_WORKSPACE
           $root = if (Test-Path phase2-arm64-exes) { 'phase2-arm64-exes' } elseif (Test-Path arm64-exes) { 'arm64-exes' } else { '.' }
@@ -433,19 +434,20 @@ jobs:
           $out = .\arm64trap.exe 2>&1 | Out-String
           Pop-Location
           Write-Host $out
-          if ($out -notmatch 'Success: Finally block executed!') {
+          $ok = $false
+          if ($out -match 'Success: Finally block executed!') {
+            if ($out -notmatch 'Done\.') { Write-Host "Warning: 'Done.' not in output (exit-path crash or buffering); finally block did run." }
+            Write-Host "Bounty Boss test passed (finally block executed)."
+            $ok = $true
+          } else {
             Write-Error "Bounty Boss failed: expected 'Success: Finally block executed!'. Got: $out"
-            exit 1
           }
-          if ($out -notmatch 'Done\.') {
-            Write-Host "Warning: 'Done.' not in output (exit-path crash or buffering); finally block did run."
-          }
-          Write-Host "Bounty Boss test passed (finally block executed)."
-          exit 0
+          echo "bounty_boss_ok=$ok" >> $env:GITHUB_OUTPUT
         shell: pwsh
 
-      # ppca64 may raise EExternalException on exit (aarch64-win64 RTL/SEH shutdown); we pass if output contains version.
+      # ppca64 may raise EExternalException on exit. Keep going on failure so we can see both results.
       - name: Verify ppca64 (Phase 3 native compiler)
+        id: verify_ppca64
         run: |
           Set-Location $env:GITHUB_WORKSPACE
           $root = if (Test-Path phase2-arm64-exes) { 'phase2-arm64-exes' } elseif (Test-Path arm64-exes) { 'arm64-exes' } else { '.' }
@@ -455,23 +457,40 @@ jobs:
           foreach ($cand in @((Join-Path $dir 'ppca64.exe'), (Join-Path $dir 'ppca64'), (Join-Path $env:GITHUB_WORKSPACE 'ppca64.exe'), (Join-Path $env:GITHUB_WORKSPACE 'ppca64'), 'compiler\ppca64.exe', 'compiler\ppca64', 'ppca64.exe', 'ppca64')) {
             if (Test-Path $cand) { $ppc = (Resolve-Path $cand).Path; break }
           }
-          if (-not $ppc) { Write-Error "ppca64 not found (searched $dir, $root, compiler, .)"; exit 1 }
-          Write-Host "Running: $ppc -iV"
-          $ver = $null
-          try {
-            $ver = & $ppc '-iV' 2>&1 | Out-String
-          } catch {
-            Write-Host "Note: ppca64 invocation threw (e.g. EExternalException on exit): $_"
+          $ok = $false
+          if (-not $ppc) {
+            Write-Error "ppca64 not found (searched $dir, $root, compiler, .)"
+          } else {
+            Write-Host "Running: $ppc -iV"
+            $ver = $null
+            try {
+              $ver = & $ppc '-iV' 2>&1 | Out-String
+            } catch {
+              Write-Host "Note: ppca64 invocation threw (e.g. EExternalException on exit): $_"
+            }
+            $exitCode = $LASTEXITCODE
+            Write-Host "ppca64 -iV output: $ver"
+            $expectedVer = $env:FPC_VERSION
+            if ($ver -and $ver -match [regex]::Escape($expectedVer)) {
+              if ($exitCode -ne 0) { Write-Host "Version OK; ppca64 exited with $exitCode (known: may crash on exit, we only require version output)." }
+              Write-Host "Verify ppca64 OK: version $expectedVer"
+              $ok = $true
+            } else {
+              Write-Error "ppca64 -iV failed or no version in output (exit $exitCode): $ver"
+            }
           }
-          $exitCode = $LASTEXITCODE
-          Write-Host "ppca64 -iV output: $ver"
-          $expectedVer = $env:FPC_VERSION
-          if ($ver -and $ver -match [regex]::Escape($expectedVer)) {
-            if ($exitCode -ne 0) { Write-Host "Version OK; ppca64 exited with $exitCode (known: may crash on exit, we only require version output)." }
-            Write-Host "Verify ppca64 OK: version $expectedVer"
-            exit 0
-          }
-          Write-Error "ppca64 -iV failed or no version in output (exit $exitCode): $ver"
-          exit 1
+          echo "ppca64_ok=$ok" >> $env:GITHUB_OUTPUT
         shell: pwsh
-    shell: pwsh
+
+      # Fail the job only if either Bounty Boss or Verify ppca64 failed (so we see both results).
+      - name: Fail if Bounty Boss or Verify ppca64 failed
+        run: |
+          $boss = "${{ steps.bounty_boss.outputs.bounty_boss_ok }}"
+          $ppc = "${{ steps.verify_ppca64.outputs.ppca64_ok }}"
+          Write-Host "Bounty Boss ok: $boss; ppca64 ok: $ppc"
+          if ($boss -ne 'true' -or $ppc -ne 'true') {
+            Write-Error "One or more checks failed (Bounty Boss: $boss, ppca64: $ppc). See logs above."
+            exit 1
+          }
+          Write-Host "All checks passed."
+        shell: pwsh

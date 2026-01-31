@@ -179,6 +179,10 @@ On Windows arm64, **ppca64.exe -iV** can print the version (e.g. 3.3.1) and then
 - **Brain 2 (architect):** "Should we split into two caches (crossinstall vs ppca64) so a failure during Build ppca64 doesn’t overwrite the crossinstall cache?" **Answer:** With save-on-success, a failed job doesn’t save at all, so we don’t overwrite a good cache with partial state. One cache is enough; the critical fix was conditional save.
 - **Brain 3 (pragmatist):** "What if the job succeeds but ppca64 is missing (e.g. make put it somewhere we don’t copy)?" **Answer:** The "Verify FPC cache contents" step runs on cache hit and fails if ppca64 is missing; the "Stage and upload" step fails if ppca64 isn’t found. So we don’t save a "success" run without ppca64.
 
+### CI: run both Bounty Boss and ppca64, then fail if either failed (Jan 2026)
+
+**What we’re doing:** On the Windows arm64 job we run **Bounty Boss** (arm64trap.exe try...finally+exit) and **Verify ppca64** (ppca64.exe -iV) one after the other. We **do not** fail the job on the first failure: each step sets an output (bounty_boss_ok / ppca64_ok) and continues. A final step **“Fail if Bounty Boss or Verify ppca64 failed”** runs after both and exits 1 only if either output is false. So we always see **both** results in the log; the job still fails if either check fails. **Why:** Bounty Boss can miss “Done.” (exit-path crash) and ppca64 can raise EExternalException on exit; we want to test both in every run and see if they’re related (e.g. same SEH/unwind path). Added late Jan 2026.
+
 ### Optional: CI artifact for assembly
 
 - Add a step in the crossbuild job (optional): compile arm64trap.pas with `-a`, upload `arm64trap.s` (or the whole phase2-tests dir) as an artifact so you can inspect the generated unwind without a local Windows arm64 run.

@@ -2,6 +2,8 @@
 
 Use these flags and steps to pinpoint where try...finally+exit or ppca64 exit fails.
 
+**Note (Jan 2026):** We run both Bounty Boss and Verify ppca64 in CI without failing on the first failure; we fail at the end if either failed so we can see both results and test whether they’re related (same SEH/unwind path). See **docs/next-steps-detailed.md** § “CI: run both Bounty Boss and ppca64, then fail if either failed”.
+
 ---
 
 ## Compiler flags (for the program you compile, e.g. arm64trap.pas)
