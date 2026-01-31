@@ -2219,9 +2219,7 @@ implementation
             inherited g_local_unwind(list, l);
             exit;
           end;
-        { Call RTL _FPC_local_unwind(frame, target) so the OS runs finally blocks
-          during unwind (RtlUnwindEx). Without this, try...finally + exit would
-          just JMP to finally and never run the unwinder → wrong behaviour. }
+        { Call _FPC_local_unwind so RtlUnwindEx runs finally blocks; plain JMP would skip unwinder. }
         pd := search_system_proc('_fpc_local_unwind');
         para1.init;
         para2.init;
