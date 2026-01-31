@@ -9,8 +9,9 @@ Step-by-step plan with checkpoints, verification, and contingencies. Re-checked 
 | Phase | Status | Next |
 |-------|--------|------|
 | 1 – Cross-build in WSL | [x] Done | – |
-| 2 – Validate binaries & SEH | [x] Done (static) | [ ] Run hello/trap on Windows arm64 when available |
-| 3 – Native ppca64.exe | [ ] Next | Build compiler for aarch64-win64 with ppcrossa64 |
+| 2 – Validate binaries & SEH | [x] Done | – (hello/trap run on Windows arm64 via GitHub Actions CI; trap printed "Caught: The Unwind Trap") |
+| 3 – Native ppca64.exe | [ ] **Next** | Build compiler for aarch64-win64 with ppcrossa64; get full CI green first |
+| 3b – Bounty Boss test | [ ] Planned | Add try...finally + exit test to CI once workflow is green (see gemini-conversation-summary.md) |
 | 4 – Self-hosting (cycle) | [ ] | Run make cycle on Windows arm64 |
 | 5 – Lazarus | [ ] | Build Lazarus with toolchain |
 | 6 – Shell ext / WinRE | [ ] | Build & test shell extension, WinRE if required |
@@ -71,7 +72,7 @@ make crossinstall -j$(nproc) \
 
 ## Phase 2: Validate binaries and SEH
 
-- [x] **Phase 2 done** (static checks; runtime on Windows arm64 still deferred)
+- [x] **Phase 2 done**
 
 **Goal:** Confirm we produce valid PE/COFF arm64 and catch SEH issues early (before cycle/Lazarus).
 
@@ -99,13 +100,50 @@ make crossinstall -j$(nproc) \
 
 ### 2.4 Checkpoint – run on Windows arm64 (or defer)
 
-- [ ] Run `hello.exe` and `trap.exe` on Windows arm64 (real, QEMU, or CI); trap must print “Caught: The Unwind Trap”
-- [x] Static checks done; runtime test deferred to Phase 4 if no Windows arm64 yet
+- [x] Run `hello.exe` and `trap.exe` on Windows arm64 (GitHub Actions `windows-11-arm`); trap printed “Caught: The Unwind Trap”
+- [x] CI workflow (`.github/workflows/win-arm64.yml`) runs cross-build on Linux, then runs hello/trap on Windows arm64; step passes
 
-### 2.5 If Phase 2 fails (SEH)
+### 2.5 Has the UNWIND/SEH bug been fixed?
+
+We don’t know for certain. Phase 2 only proved that **one** SEH case works: a simple try/except with `raise` in a nested procedure (trap.exe printed “Caught: The Unwind Trap”). Trunk may already include fixes (e.g. the Jan 2026 “local unwind” MR for try/finally Exit/Break/Continue). The **real** stress test is **make cycle**: the compiler compiling itself uses many more exception paths and recursion. So we’re **ready to try** Phase 3 (build ppca64) and Phase 4 (make cycle); if cycle crashes, we may still hit SEH or other bugs and need to fix them (e.g. in `cgobj.pas`).
+
+### 2.6 If Phase 2 fails (SEH)
 
 - **Crash in trap or wrong unwind in .s:** Focus on `compiler/aarch64/cgobj.pas` (e.g. `WriteUnwindInfo`), stack layout, and alignment. Compare FPC’s .s with clang-generated .s for a similar C try/except.
 - **Bug #66952** and recent “local unwind” MR (try/finally Exit/Break/Continue) are the same area; align fixes with trunk.
+
+
+### 2.7 Planned: Bounty Boss test (after CI is green)
+
+- **Goal:** Add the foundation's "Bounty Boss" test (try...finally + exit) to CI: compile with ppcrossa64/ppca64, run on Windows arm64, assert output contains "Success: Finally block executed!". Test snippet and rationale in `docs/gemini-conversation-summary.md`. Do this once the current workflow (hello, trap, ppca64 verify) is fully passing.
+
+---
+
+## Build chain: what we have vs what we’re building
+
+- **We have (Phase 1–2):** **ppcrossa64** = cross-compiler. It **runs on Linux** (WSL or CI) and **produces** Windows arm64 binaries (.exe, .dll). We built it on Linux with the host FPC (e.g. `fpc` from apt). So we did **not** build a compiler that runs on Windows arm64 yet.
+- **Phase 3:** Use ppcrossa64 to **compile the FPC compiler source** for target aarch64-win64. The **output** is **ppca64** = a Windows .exe that **runs on** Windows arm64. So ppcrossa64 (parent, on Linux) **produces** ppca64 (child, for Windows arm64). One more “generation”: we’re building the native compiler from the cross-compiler.
+- **Phase 4 (make cycle):** Take ppca64.exe to Windows arm64 and run **make cycle**: ppca64 **compiles the FPC source again** and produces a **new** compiler binary. That proves the compiler can compile itself (self-hosting). So: Linux ppcrossa64 → ppca64 (Windows) → make cycle on Windows → new ppca64. No “child of a child” in name; it’s the same compiler, just proving it can reproduce itself on Windows arm64.
+
+**Summary:** We built the cross-compiler on Linux (ppcrossa64). We have **not** yet built the native Windows arm64 compiler (ppca64). Phase 3 = build ppca64 using ppcrossa64. Phase 4 = run make cycle with ppca64 on Windows arm64.
+
+---
+
+## What is Lazarus and why it’s in the bounty
+
+- **Lazarus** = the **IDE** for Free Pascal (like Delphi: visual designer, debugger, form designer). It’s a separate, big Pascal project that **depends on** the FPC compiler. The name is a “resurrection” reference (project rose from the earlier Megido effort).
+- **Relation to this work:** The bounty says **“Lazarus itself must compile.”** So the **validation** is: our Windows arm64 toolchain (ppca64 + RTL/units) must be able to **build** the Lazarus IDE. If Lazarus builds and runs on Windows arm64, the compiler is considered production-ready for real projects.
+- **Place in the plan:** **Phase 5** = build Lazarus with the (Phase 3/4) Windows arm64 compiler. So: Phase 3 (ppca64) → Phase 4 (make cycle) → Phase 5 (build Lazarus with that compiler). Lazarus is the “stress test” after self-hosting.
+
+---
+
+## ppca64 vs make cycle (clarification)
+
+- **ppca64** = the **native Windows arm64 compiler binary** (e.g. `ppca64.exe`). It *runs* on Windows arm64 and compiles Pascal to Windows arm64 code. We **don’t have it yet**. We have **ppcrossa64** = cross-compiler (runs on Linux, produces Windows arm64 code).
+- **Phase 3** = **produce ppca64**: use ppcrossa64 (on Linux/WSL or CI) to compile the FPC compiler source *for* target aarch64-win64. The *output* of that build is ppca64 (a Windows PE). So we *build* the native compiler using the cross-compiler.
+- **make cycle** = the **self-hosting test**: on Windows arm64, you run the compiler (ppca64.exe) and tell it to compile the FPC source; it produces a new compiler binary. If that finishes without crashing, the compiler is “self-hosting.” **Phase 4** = run make cycle on Windows arm64 using the ppca64 we built in Phase 3.
+
+So: **Phase 3 → get ppca64.exe. Phase 4 → run make cycle with it on Windows arm64.**
 
 ---
 
@@ -239,9 +277,9 @@ make crossinstall -j$(nproc) \
 
 1. [x] Confirm Phase 1 checkpoints (ppcrossa64 + units).
 2. [x] Run Phase 2.1–2.3 (hello, objdump, trap + .s inspection).
-3. [ ] If trap crashes on Windows arm64 or unwind looks wrong: open `compiler/aarch64/cgobj.pas`, compare with ARM64 PCS/SEH, plan SEH patch.
-4. [ ] **Next:** Run Phase 3 – document exact command that produces the Windows arm64 compiler .exe (ppca64).
-5. [ ] Set up Windows arm64 environment (real, QEMU, or GitHub Actions) for Phase 4.
+3. [x] Run hello/trap on Windows arm64 (CI: GitHub Actions `windows-11-arm`); trap passed (“Caught: The Unwind Trap”).
+4. [ ] **Next:** Phase 3 – build native Windows arm64 compiler (ppca64.exe) with ppcrossa64; document exact command.
+5. [ ] Set up Windows arm64 environment for Phase 4 (CI already has `windows-11-arm`; can use for cycle when we have ppca64.exe).
 
 ---
 

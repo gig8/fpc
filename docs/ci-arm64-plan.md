@@ -103,12 +103,9 @@ Starting with (2) is enough to “setup the CI arm64 test”; (1) can be added l
 
 ## Checklist (CI arm64 setup)
 
-- [ ] Create GitHub repo (e.g. `github.com/gig8/fpc`)
-- [ ] Add remote: `git remote add github git@github.com:gig8/fpc.git`
-- [ ] Add workflow: `.github/workflows/win-arm64.yml` (stub added; replace “Setup FPC” placeholder with real steps)
-- [ ] Push branch: `git push github feature/win-aarch64`
-- [ ] Implement “Setup FPC” on Windows arm64 (download artifact from Linux cross-build, or install pre-built FPC, or bootstrap build)
-- [ ] Uncomment “Compile Phase 2 tests” and “Run hello.exe / trap.exe” steps once FPC is available on the runner
-- [ ] (Optional) Add Linux job to cross-build and upload artifact so Windows job downloads it
-
-The repo already contains a **stub** `.github/workflows/win-arm64.yml` that runs on `windows-11-arm` and fails at “Setup FPC” until you implement it (no submodule or second repo).
+- [x] Create GitHub repo (`github.com/gig8/fpc`)
+- [x] Add remote: `git remote add github git@github.com:gig8/fpc.git`
+- [x] Add workflow: `.github/workflows/win-arm64.yml` (Linux cross-build → upload hello.exe/trap.exe → Windows arm64 runs them)
+- [x] Push branch: `git push github feature/win-aarch64`
+- [x] Linux job: cross-build FPC aarch64-win64, compile Phase 2 tests, upload artifact
+- [x] Windows arm64 job: download artifact, run hello.exe and trap.exe; assert “Caught: The Unwind Trap”

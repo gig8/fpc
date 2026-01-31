@@ -1,5 +1,10 @@
 # Windows arm64 CI – cross-build on Linux, run hello.exe/trap.exe on Windows arm64.
 # Caches: llvm-mingw (release), FPC cross-build + ppca64 (source hash), msgtxt.inc (msg hash). See docs/ci-arm64-plan.md.
+#
+# Cache invalidation: if you change something that affects a build output, update that cache's key.
+# - llvm-mingw: key = LLVM_MINGW_RELEASE (+ runner). Change env.LLVM_MINGW_RELEASE to force re-download.
+# - FPC cross-build: key = hash(compiler/**, rtl/**, packages/**, Makefile*). Add any new dir/file that affects crossinstall or ppca64.
+# - msgtxt: key = hash(compiler/msg/error*.msg). Add any msg file that feeds msg2inc.
 
 name: Windows arm64
 
@@ -92,6 +97,12 @@ jobs:
             -FD"$RUNNER_TEMP/llvm-mingw/bin" \
             -o"$GITHUB_WORKSPACE/docs/phase2-tests/trap.exe" \
             docs/phase2-tests/trap.pas
+          "$PPC" -Twin64 -XPaarch64-w64-mingw32- \
+            -Fu"$UP/rtl" -Fu"$UP/rtl-objpas" \
+            -FE"$GITHUB_WORKSPACE/docs/phase2-tests" \
+            -FD"$RUNNER_TEMP/llvm-mingw/bin" \
+            -o"$GITHUB_WORKSPACE/docs/phase2-tests/arm64trap.exe" \
+            docs/phase2-tests/arm64trap.pas
 
       - name: Cache msgtxt.inc / msgidx.inc (host-generated, skip rebuild when msg files unchanged)
         id: cache_msgtxt
@@ -101,6 +112,13 @@ jobs:
             compiler/msgtxt.inc
             compiler/msgidx.inc
           key: msgtxt-${{ runner.os }}-${{ hashFiles('compiler/msg/error*.msg') }}
+
+      - name: Report cache status (llvm-mingw, FPC cross-build, msgtxt)
+        run: |
+          echo "cache_llvm=${{ steps.cache_llvm.outputs.cache-hit }}"
+          echo "cache_fpc=${{ steps.cache_fpc.outputs.cache-hit }}"
+          echo "cache_msgtxt=${{ steps.cache_msgtxt.outputs.cache-hit }}"
+          echo "Cache hits above = skip download/build for those steps."
 
       - name: Generate msgtxt.inc with host FPC (Phase 3)
         if: steps.cache_msgtxt.outputs.cache-hit != 'true'
@@ -125,14 +143,20 @@ jobs:
         env:
           PATH: "/usr/bin:/usr/local/bin:$RUNNER_TEMP/llvm-mingw/bin:$PATH"
 
+      - name: Stage and upload arm64 executables and ppca64
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/arm64-exes"
+          cp "$GITHUB_WORKSPACE/docs/phase2-tests/hello.exe" "$GITHUB_WORKSPACE/arm64-exes/"
+          cp "$GITHUB_WORKSPACE/docs/phase2-tests/trap.exe" "$GITHUB_WORKSPACE/arm64-exes/"
+          cp "$GITHUB_WORKSPACE/docs/phase2-tests/arm64trap.exe" "$GITHUB_WORKSPACE/arm64-exes/"
+          cp "$GITHUB_WORKSPACE/compiler/ppca64" "$GITHUB_WORKSPACE/arm64-exes/"
+          ls -la "$GITHUB_WORKSPACE/arm64-exes/"
+
       - name: Upload arm64 executables and ppca64
         uses: actions/upload-artifact@v4
         with:
           name: phase2-arm64-exes
-          path: |
-            docs/phase2-tests/hello.exe
-            docs/phase2-tests/trap.exe
-            compiler/ppca64
+          path: arm64-exes
 
   test-windows-arm64:
     name: Run on Windows arm64
@@ -148,7 +172,8 @@ jobs:
 
       - name: Run hello.exe and trap.exe
         run: |
-          $dir = if (Test-Path hello.exe) { '.' } else { 'docs\phase2-tests' }
+          Set-Location $env:GITHUB_WORKSPACE
+          $dir = if (Test-Path arm64-exes\hello.exe) { 'arm64-exes' } else { '.' }
           Push-Location $dir
           .\hello.exe
           $out = .\trap.exe 2>&1 | Out-String
@@ -161,12 +186,33 @@ jobs:
           exit 0
         shell: pwsh
 
+      - name: Run Bounty Boss test (try...finally + exit)
+        run: |
+          Set-Location $env:GITHUB_WORKSPACE
+          $dir = if (Test-Path arm64-exes\arm64trap.exe) { 'arm64-exes' } else { '.' }
+          Push-Location $dir
+          $out = .\arm64trap.exe 2>&1 | Out-String
+          Pop-Location
+          Write-Host $out
+          if ($out -notmatch 'Success: Finally block executed!') {
+            Write-Error "Bounty Boss failed: expected 'Success: Finally block executed!'. Got: $out"
+            exit 1
+          }
+          if ($out -notmatch 'Done\.') {
+            Write-Error "Bounty Boss failed: expected 'Done.'. Got: $out"
+            exit 1
+          }
+          Write-Host "Bounty Boss test passed."
+          exit 0
+        shell: pwsh
+
       - name: Verify ppca64 (Phase 3 native compiler)
         run: |
           Set-Location $env:GITHUB_WORKSPACE
-          Write-Host 'Artifact layout:'; Get-ChildItem compiler -ErrorAction SilentlyContinue; Get-ChildItem docs\phase2-tests -ErrorAction SilentlyContinue
+          $dir = if (Test-Path arm64-exes\ppca64) { 'arm64-exes' } elseif (Test-Path arm64-exes\ppca64.exe) { 'arm64-exes' } else { '.' }
+          Write-Host "Looking for ppca64 in: $dir"; Get-ChildItem $dir -ErrorAction SilentlyContinue
           $ppc = $null
-          foreach ($cand in @('compiler\ppca64.exe', 'compiler\ppca64', 'ppca64.exe', 'ppca64')) {
+          foreach ($cand in @("$dir\ppca64.exe", "$dir\ppca64", 'arm64-exes\ppca64.exe', 'arm64-exes\ppca64', 'compiler\ppca64.exe', 'compiler\ppca64', 'ppca64.exe', 'ppca64')) {
             if (Test-Path $cand) { $ppc = (Resolve-Path $cand).Path; break }
           }
           if (-not $ppc) { Write-Error 'ppca64 not found'; exit 1 }
