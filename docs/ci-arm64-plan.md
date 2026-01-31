@@ -108,11 +108,13 @@ Starting with (2) is enough to “setup the CI arm64 test”; (1) can be added l
 ## Caching best practices (win-arm64 workflow)
 
 - **Key = inputs that affect the output.** Each cache key must include everything that affects the cached paths (e.g. source hash for FPC, release id for llvm-mingw). See comments at top of `win-arm64.yml`.
-- **Bump key when cache structure changes.** If you add/remove paths in the cache (e.g. we added `compiler/ppca64`), bump a suffix in the key (e.g. `-v2` → `-v3`) so old caches (saved without that path) are not restored. Otherwise you get a “hit” but missing files.
+- **Bump key when cache structure changes.** If you add/remove paths in the cache (e.g. we added `compiler/ppca64`), bump a suffix in the key (e.g. `-v6` → `-v7`) so old caches (saved without that path) are not restored. Otherwise you get a “hit” but missing files.
 - **Verify after restore.** When a cache hit skips a build step, verify that the restored paths actually contain the expected files. The workflow has a “Verify FPC cache contents” step that runs only on cache hit and fails if `ppcrossa64`, `ppca64`, or `fpc_install/.../units/aarch64-win64` are missing.
 - **No restore-keys for FPC.** We use an exact key (source hash + suffix) so we don’t restore a stale compiler/RTL. Partial matches would risk wrong binaries.
-- **Cache is saved only on job success.** If the job fails (e.g. at staging), the cache is not updated. Fix the failure and get a green run so the cache is written once with the full set of paths.
+- **Why the cache can be incomplete:** The cache action saves at job end even when the job fails. If a run failed after crossinstall but before or during “Build native ppca64”, the saved cache has `ppcrossa64` and `fpc_install` but no `compiler/ppca64`. A later run with the same key restores that incomplete cache → “Verify FPC cache contents” fails. **Fix:** Bump the key suffix in the workflow (e.g. `-v6` → `-v7`) to force a full rebuild; the new run will save a complete cache.
 - **Document invalidation in the workflow.** The top-of-file comments list what each key depends on and when to bump it.
+
+**ppca64 vs ppca64.exe:** We want the Windows runner to get **ppca64.exe** so `ppca64.exe -iV` works reliably (output and exit code). Make produces the native Windows compiler as `ppca64` (no extension). We cache it as `compiler/ppca64`. For the artifact we stage it as **ppca64.exe** so the Windows job runs `ppca64.exe -iV`.
 
 ---
 

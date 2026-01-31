@@ -10,8 +10,8 @@ Step-by-step plan with checkpoints, verification, and contingencies. Re-checked 
 |-------|--------|------|
 | 1 – Cross-build in WSL | [x] Done | – |
 | 2 – Validate binaries & SEH | [x] Done | – (hello/trap run on Windows arm64 via CI; trap printed "Caught: The Unwind Trap") |
-| 3 – Native ppca64.exe | [x] Done | – (CI builds ppca64, stages it, Windows job runs ppca64 -iV) |
-| 3b – Bounty Boss test | [x] Fixes pushed | **Verify CI:** Ensure run for current HEAD passes (cross-build, Phase 2 compile, Run Bounty Boss test). Fixes: compiler `g_local_unwind`, RTL export of `_fpc_local_unwind`, CI ppcrossa64 path + cache -v3. If CI fails at Cross-install (exit 2), see **docs/review-docs-and-ci-failure.md**; if at Phase 2 compile, check ppcrossa64 path under fpc_install. |
+| 3 – Native ppca64.exe | [x] Done | – (CI builds ppca64, stages as **ppca64.exe** so Windows job runs ppca64.exe -iV; make outputs ppca64, we copy to ppca64.exe in artifact) |
+| 3b – Bounty Boss test | [x] Fixes pushed | **Verify CI:** Ensure run for current HEAD passes (cross-build, Phase 2 compile, Run Bounty Boss test). Fixes: compiler `g_local_unwind` (cgcpu.pas), RTL declare `_fpc_local_unwind` in system interface (rtl/win64/system.pp), compiler `search_system_proc` try Find(upper(s)) (symtable.pas), CI ppcrossa64 path + cache -v5. If CI fails at Cross-install (e.g. sysutils.pp(659) Unknown compilerproc), see **docs/review-docs-and-ci-failure.md**; if at Phase 2 compile, check ppcrossa64 path. |
 | 4 – Self-hosting (cycle) | [ ] **Next after CI green** | Run make cycle on Windows arm64 |
 | 5 – Lazarus | [ ] | Build Lazarus with toolchain |
 | 6 – Shell ext / WinRE | [ ] | Build & test shell extension, WinRE if required |
@@ -116,7 +116,7 @@ We don’t know for certain. Phase 2 only proved that **one** SEH case works: a 
 ### 2.7 Bounty Boss test (try...finally + exit)
 
 - **Goal:** arm64trap.exe (try...finally + exit) must run on Windows arm64 and print "Success: Finally block executed!" and "Done." CI runs it last.
-- **Status:** Fixes implemented and pushed: (1) compiler `tcgaarch64.g_local_unwind` for aarch64-win64 calls `_FPC_local_unwind(SP, target)`; (2) RTL exports `_fpc_local_unwind` in system.ppu via `fpc_local_unwind_export_ref` in init; (3) CI finds/copies ppcrossa64 under fpc_install when cache misses; cache key -v3. **Next:** Confirm CI run for current HEAD is fully green, then proceed to Phase 4 (make cycle).
+- **Status:** Fixes implemented and pushed: (1) compiler `tcgaarch64.g_local_unwind` for aarch64-win64 calls `_FPC_local_unwind(SP, target)`; (2) RTL declares `_fpc_local_unwind` in the win64 system unit **interface** (rtl/win64/system.pp under SYSTEM_USE_WIN_SEH) so the symbol is in the globalsymtable and written to system.ppu; (3) compiler `search_system_proc` tries Find(upper(s)) when find(s) fails (symtable.pas); (4) CI finds/copies ppcrossa64 when cache misses; cache key -v5. **Next:** Confirm CI run for current HEAD is fully green, then proceed to Phase 4 (make cycle).
 
 ---
 
@@ -154,11 +154,16 @@ When arm64trap.exe fails on Windows arm64, use this to find the cause and fix.
 
 ### Step 4: Root cause and fix
 
-- **Root cause:** For try...finally + exit (or break/continue), the aarch64 backend emitted a **plain JMP** to the finally label instead of calling **RtlUnwindEx** (via `_FPC_local_unwind`). So local unwind for finally was not implemented for aarch64-win64.
-- **Fix (compiler):** Implement `tcgaarch64.g_local_unwind` in `compiler/aarch64/cgcpu.pas` for `system_aarch64_win64`, mirroring `tcgx86_64.g_local_unwind`: call `_FPC_local_unwind(SP, target)` (current frame pointer and target label). The RTL already provides `_fpc_local_unwind` in `rtl/win64/seh64.inc`; the compiler just had to emit the call for aarch64.
-- **Fix implemented:** See **docs/bounty-boss-local-unwind-fix.md** (white paper: problem, root cause, implementation, verification). Code change: `compiler/aarch64/cgcpu.pas` — override `g_local_unwind` for `system_aarch64_win64` to call `_FPC_local_unwind(SP, target)`.
+- **Root cause (Bounty Boss):** For try...finally + exit (or break/continue), the aarch64 backend emitted a **plain JMP** to the finally label instead of calling **RtlUnwindEx** (via `_FPC_local_unwind`). So local unwind for finally was not implemented for aarch64-win64.
+- **Fix (compiler):** Implement `tcgaarch64.g_local_unwind` in `compiler/aarch64/cgcpu.pas` for `system_aarch64_win64`, mirroring `tcgx86_64.g_local_unwind`: call `_FPC_local_unwind(SP, target)`. The RTL provides `_fpc_local_unwind` in `rtl/win64/seh64.inc`; body is in implementation, but the symbol must be in system.ppu so other units (e.g. sysutils) can resolve it via `search_system_proc`.
+- **Fix (RTL export):** Declare `_fpc_local_unwind` in the **interface** of the win64 system unit (rtl/win64/system.pp under SYSTEM_USE_WIN_SEH) so the procsym is in the globalsymtable and written to system.ppu. No var or init assignment. See **docs/review-docs-and-ci-failure.md** for the sysutils.pp(659) “Unknown compilerproc” failure and minimal fix.
+- **Fix (compiler lookup):** In `search_system_proc` (symtable.pas), when find(s) fails, try Find(upper(s)) so the symbol is found regardless of casing in the PPU.
 - **Check:** Recompile arm64trap.pas, run on Windows arm64; expect "Success: Finally block executed!" and "Done."; CI “Run Bounty Boss test” should pass.
-- **References:** Bug #66952; “local unwind” MR; `compiler/aarch64/ncpuflw.pas`; `compiler/aarch64/cpupi.pas`; **docs/bounty-boss-local-unwind-fix.md**.
+- **References:** Bug #66952; “local unwind” MR; **docs/bounty-boss-local-unwind-fix.md**; **docs/review-docs-and-ci-failure.md**.
+
+### Follow-up: why the FPC cache can be incomplete
+
+The FPC cache is saved at job end **even when the job fails**. If a run failed after crossinstall but before or during "Build native ppca64", the saved cache has ppcrossa64 and fpc_install but no compiler/ppca64. A later run with the same key then restores that incomplete cache. **Workaround:** Bump the cache key suffix in the workflow (e.g. -v6 → -v7) to force a full rebuild. **After CI is stable:** Consider why the cache doesn't work as intended—e.g. only save the FPC cache on job success (conditional save), or split the Linux job so the cache is written only after Phase 3 completes, to avoid incomplete caches.
 
 ### Optional: CI artifact for assembly
 
@@ -169,7 +174,7 @@ When arm64trap.exe fails on Windows arm64, use this to find the cause and fix.
 ## Build chain: what we have vs what we’re building
 
 - **We have (Phase 1–2):** **ppcrossa64** = cross-compiler. It **runs on Linux** (WSL or CI) and **produces** Windows arm64 binaries (.exe, .dll). We built it on Linux with the host FPC (e.g. `fpc` from apt). So we did **not** build a compiler that runs on Windows arm64 yet.
-- **Phase 3:** Use ppcrossa64 to **compile the FPC compiler source** for target aarch64-win64. The **output** is **ppca64** = a Windows .exe that **runs on** Windows arm64. So ppcrossa64 (parent, on Linux) **produces** ppca64 (child, for Windows arm64). One more “generation”: we’re building the native compiler from the cross-compiler.
+- **Phase 3:** Use ppcrossa64 to **compile the FPC compiler source** for target aarch64-win64. The **output** is **ppca64** = a Windows .exe that **runs on** Windows arm64. So ppcrossa64 (parent, on Linux) **produces** ppca64 (child, for Windows arm64). One more “generation”: we’re building the native compiler from the cross-compiler. We want the artifact on Windows to be **ppca64.exe** so the runner can run it and capture output/exit code reliably; make produces `ppca64` (no extension), so the workflow copies it to `ppca64.exe` when staging the artifact.
 - **Phase 4 (make cycle):** Take ppca64.exe to Windows arm64 and run **make cycle**: ppca64 **compiles the FPC source again** and produces a **new** compiler binary. That proves the compiler can compile itself (self-hosting). So: Linux ppcrossa64 → ppca64 (Windows) → make cycle on Windows → new ppca64. No “child of a child” in name; it’s the same compiler, just proving it can reproduce itself on Windows arm64.
 
 **Summary:** We built the cross-compiler on Linux (ppcrossa64). We have **not** yet built the native Windows arm64 compiler (ppca64). Phase 3 = build ppca64 using ppcrossa64. Phase 4 = run make cycle with ppca64 on Windows arm64.
@@ -359,7 +364,7 @@ then you have provided **concrete proof** that the backend is production-ready. 
 2. [x] Run Phase 2.1–2.3 (hello, objdump, trap + .s inspection).
 3. [x] Run hello/trap on Windows arm64 (CI); trap passed (“Caught: The Unwind Trap”).
 4. [x] Phase 3 – build ppca64 with ppcrossa64; CI builds, stages, and verifies ppca64 -iV on Windows arm64.
-5. [ ] **Next:** Fix Bounty Boss (arm64trap.exe try...finally + exit) so CI is fully green; then Phase 4 (make cycle).
+5. [x] Fix Bounty Boss (arm64trap.exe try...finally + exit): compiler g_local_unwind + RTL interface declaration + symtable lookup. **Next:** Verify CI is fully green; then Phase 4 (make cycle).
 6. [ ] Phase 4: make cycle on Windows arm64 (CI already has `windows-11-arm`).
 
 ---
