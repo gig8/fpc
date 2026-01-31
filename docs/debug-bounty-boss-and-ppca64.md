@@ -67,3 +67,74 @@ When PowerShell runs `.\ppca64.exe -iV` and ppca64 raises EExternalException on 
 3. **RTL debug:** Rebuild RTL with -dFPC_DEBUG_WIN64_UNWIND and -dFPC_DEBUG_EXIT_EXCEPTION; build arm64trap and ppca64 with that RTL; run and capture stderr.
 
 Compare behaviour (output, crash point) between 1 and 2 to confirm whether the failure is in the unwind path or elsewhere. Use 3 to get the exact moment and exception code.
+
+---
+
+## Assembly patterns: which version was compiled?
+
+When you compile with **-a**, the compiler writes a `.s` (assembly) file. You can grep it to confirm whether the **fix** (call to `_FPC_local_unwind`) or the **no-fix** (plain branch) was emitted.
+
+| Version | Executable / .s | What to look for |
+|--------|------------------|------------------|
+| **With fix** | `arm64trap.exe` / `arm64trap.s` | A **call** to `_FPC_local_unwind`. |
+| **Without fix** | `arm64trap_no_fix.exe` / `arm64trap_no_fix.s` | **No** reference to `_FPC_local_unwind`; instead a direct **branch** to the finally label. |
+
+### Patterns to search for
+
+- **Fix was compiled in (expected in `arm64trap.s`):**
+  - `_FPC_local_unwind` or `_FPC_LOCAL_UNWIND` (symbol reference).
+  - `bl _FPC_local_unwind` or `bl _FPC_LOCAL_UNWIND` (AArch64 call = branch with link).
+
+- **No-fix was compiled in (expected in `arm64trap_no_fix.s`):**
+  - **Absence** of `_FPC_local_unwind` in the try/finally path.
+  - A direct **branch** to a local label (e.g. `b .L123` or `b .L$test$...`) instead of a call.
+
+Example (Linux or CI):
+
+```bash
+# Fix version: expect at least one match
+grep -n '_FPC_local_unwind\|_FPC_LOCAL_UNWIND\|bl.*local_unwind' arm64trap.s
+
+# No-fix version: expect no match
+grep -n '_FPC_local_unwind\|_FPC_LOCAL_UNWIND' arm64trap_no_fix.s
+```
+
+CI runs these checks in the "Verify assembly patterns (Bounty Boss fix vs no-fix)" step and reports in the log. The artifact includes both `.exe` and `.s` files so you can re-check locally.
+
+---
+
+## Optimization flags (-O1, -O2, -O3, -Os)
+
+Optimization can change code layout (stack frame, branches, tail calls) and might affect SEH/unwind or the try...finally path. **CI currently uses the default: no `-O`**, so `optimizerswitches = []` (no optimizer switches).
+
+### Flags to check
+
+| Flag | Effect (aarch64) |
+|------|------------------|
+| **(default, no -O)** | No optimizer switches. This is what CI uses. |
+| **-O1** | Level 1 (generic). |
+| **-O2** | Level 2: adds e.g. `cs_opt_stackframe`, `cs_opt_tailrecursion`, `cs_opt_nodecse`, `cs_opt_consts`. Stack frame and tail-call optimizations can change stack layout and control flow. |
+| **-O3** | Level 3: more aggressive (includes level 2). Peephole optimizations (e.g. in `compiler/aarch64/aoptcpu.pas`, branch opts) run. |
+| **-O4** | Level 4: even more. |
+| **-Os** | Optimize for size (`cs_opt_size`). Used in aarch64 for e.g. concatcopy and division; not in the try/finally path. |
+
+The try...finally code path (`g_local_unwind` in `ncpuflw.pas` / `cgcpu.pas`) does **not** check optimization flags; it always emits either the call to `_FPC_local_unwind` or the plain branch. So the **same** high-level code is generated. What can change with `-O2`/`-O3` is:
+
+- **Peephole** (aoptcpu): branch and instruction reordering (e.g. `OptPass1B`, `OptPass2B`).
+- **Stack frame** (`cs_opt_stackframe`): omitting frame pointer can affect unwinder expectations.
+- **Tail recursion** (`cs_opt_tailrecursion`): can change call/return pattern.
+
+If the bug appears only with **-O2** or **-O3**, an optimizer is a likely suspect. If it appears with **default** and also with **-O1**, the cause is probably not optimization-level-specific.
+
+### How to test
+
+```bash
+# Default (same as CI)
+ppcrossa64 -Twin64 ... -oarm64trap.exe arm64trap.pas
+
+# With optimization – compare behaviour
+ppcrossa64 -Twin64 -O2 ... -oarm64trap_O2.exe arm64trap.pas
+ppcrossa64 -Twin64 -O3 ... -oarm64trap_O3.exe arm64trap.pas
+```
+
+Run each on Windows arm64 and compare: does Bounty Boss or ppca64 exit failure depend on `-O`? If yes, bisect with `-O1` vs `-O2` to see which level introduces the problem; then check aarch64’s level2/level3 switches and peephole (aoptcpu) for that target.

@@ -117,6 +117,8 @@ We don’t know for certain. Phase 2 only proved that **one** SEH case works: a 
 
 - **Goal:** arm64trap.exe (try...finally + exit) must run on Windows arm64 and print "Success: Finally block executed!" and "Done." CI runs it last.
 - **Status:** Fixes implemented and pushed: (1) compiler `tcgaarch64.g_local_unwind` for aarch64-win64 calls `_FPC_local_unwind(SP, target)`; (2) RTL declares `_fpc_local_unwind` in the win64 system unit **interface** (rtl/win64/system.pp under SYSTEM_USE_WIN_SEH) so the symbol is in the globalsymtable and written to system.ppu; (3) compiler `search_system_proc` tries Find(upper(s)) when find(s) fails (symtable.pas); (4) CI finds/copies ppcrossa64 when cache misses; cache key -v5. **Next:** Confirm CI run for current HEAD is fully green, then proceed to Phase 4 (make cycle).
+- **CI (Jan 2026):** We now build and run **both** Bounty Boss versions for comparison: **arm64trap.exe** (with fix) and **arm64trap_no_fix.exe** (compiled with `-dFPC_NO_WIN64_LOCAL_UNWIND`). Both are compiled with **-a** so we get **arm64trap.s** and **arm64trap_no_fix.s**. A "Verify assembly patterns" step greps the .s files to confirm fix version contains `_FPC_local_unwind` and no-fix version does not. The artifact includes both .exe and .s files. See **docs/debug-bounty-boss-and-ppca64.md** § "Assembly patterns".
+- **Optimization:** CI uses **default** (no `-O`), so no optimizer switches. If the failure were optimization-related (e.g. peephole or stack-frame opt cutting something), it could appear only with `-O2`/`-O3`. See **docs/debug-bounty-boss-and-ppca64.md** § "Optimization flags" for how to test with `-O1`, `-O2`, `-O3`, `-Os`.
 
 ---
 

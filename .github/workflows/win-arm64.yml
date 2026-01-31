@@ -198,11 +198,19 @@ jobs:
             -FD"$RUNNER_TEMP/llvm-mingw/bin" \
             -o"$GITHUB_WORKSPACE/docs/phase2-tests/trap.exe" \
             docs/phase2-tests/trap.pas
+          # Bounty Boss: with fix (default) – emits call to _FPC_local_unwind
           "$PPC" -Twin64 -XPaarch64-w64-mingw32- \
             -Fu"$UP/rtl" -Fu"$UP/rtl-objpas" \
             -FE"$GITHUB_WORKSPACE/docs/phase2-tests" \
             -FD"$RUNNER_TEMP/llvm-mingw/bin" \
-            -o"$GITHUB_WORKSPACE/docs/phase2-tests/arm64trap.exe" \
+            -a -o"$GITHUB_WORKSPACE/docs/phase2-tests/arm64trap.exe" \
+            docs/phase2-tests/arm64trap.pas
+          # Bounty Boss: without fix – emits plain branch to finally (for comparison)
+          "$PPC" -Twin64 -XPaarch64-w64-mingw32- -dFPC_NO_WIN64_LOCAL_UNWIND \
+            -Fu"$UP/rtl" -Fu"$UP/rtl-objpas" \
+            -FE"$GITHUB_WORKSPACE/docs/phase2-tests" \
+            -FD"$RUNNER_TEMP/llvm-mingw/bin" \
+            -a -o"$GITHUB_WORKSPACE/docs/phase2-tests/arm64trap_no_fix.exe" \
             docs/phase2-tests/arm64trap.pas
           if [ -f docs/phase2-tests/neontest.pas ]; then
             "$PPC" -Twin64 -XPaarch64-w64-mingw32- \
@@ -268,6 +276,33 @@ jobs:
       # Paths: compile writes to $GITHUB_WORKSPACE/docs/phase2-tests/{hello,trap,arm64trap,neontest}.exe;
       # ppca64 is at $GITHUB_WORKSPACE/compiler/ppca64 (or compiler/aarch64/bin/aarch64-win64/).
       # We stage into arm64-exes/ and upload that dir; download extracts to workspace.
+      - name: Verify assembly patterns (Bounty Boss fix vs no-fix)
+        run: |
+          D="$GITHUB_WORKSPACE/docs/phase2-tests"
+          echo "::group::Assembly: fix version (arm64trap.s) – expect call to _FPC_local_unwind"
+          if [ -f "$D/arm64trap.s" ]; then
+            if grep -q '_FPC_local_unwind\|_FPC_LOCAL_UNWIND' "$D/arm64trap.s"; then
+              echo "OK: arm64trap.s contains _FPC_local_unwind (fix was compiled in)"
+              grep -n '_FPC_local_unwind\|_FPC_LOCAL_UNWIND\|bl.*local_unwind' "$D/arm64trap.s" || true
+            else
+              echo "::warning::arm64trap.s does NOT contain _FPC_local_unwind (fix may not be active)"
+            fi
+          else
+            echo "::warning::arm64trap.s not found"
+          fi
+          echo "::endgroup::"
+          echo "::group::Assembly: no-fix version (arm64trap_no_fix.s) – expect NO _FPC_local_unwind"
+          if [ -f "$D/arm64trap_no_fix.s" ]; then
+            if grep -q '_FPC_local_unwind\|_FPC_LOCAL_UNWIND' "$D/arm64trap_no_fix.s"; then
+              echo "::warning::arm64trap_no_fix.s contains _FPC_local_unwind (expected plain branch only)"
+            else
+              echo "OK: arm64trap_no_fix.s has no _FPC_local_unwind (no-fix version as expected)"
+            fi
+          else
+            echo "::warning::arm64trap_no_fix.s not found"
+          fi
+          echo "::endgroup::"
+
       - name: List expected exe locations (diagnostic)
         run: |
           D="$GITHUB_WORKSPACE"
@@ -288,15 +323,24 @@ jobs:
           for f in hello trap; do
             if [ -f "$D/docs/phase2-tests/${f}.exe" ]; then cp "$D/docs/phase2-tests/${f}.exe" "$STAGE/"; else echo "Missing: docs/phase2-tests/${f}.exe"; exit 1; fi
           done
-          if [ -f "$D/docs/phase2-tests/arm64trap.exe" ]; then
-            cp "$D/docs/phase2-tests/arm64trap.exe" "$STAGE/"
-          elif [ -f "$D/docs/phase2-tests/arm64trap" ]; then
-            cp "$D/docs/phase2-tests/arm64trap" "$STAGE/arm64trap.exe"
-          else
-            echo "Missing: arm64trap (expected docs/phase2-tests/arm64trap.exe or arm64trap)"
-            ls -la "$D/docs/phase2-tests/"
-            exit 1
-          fi
+          for exe in arm64trap arm64trap_no_fix; do
+            if [ -f "$D/docs/phase2-tests/${exe}.exe" ]; then
+              cp "$D/docs/phase2-tests/${exe}.exe" "$STAGE/"
+            elif [ -f "$D/docs/phase2-tests/${exe}" ]; then
+              cp "$D/docs/phase2-tests/${exe}" "$STAGE/${exe}.exe"
+            else
+              echo "Missing: $exe (expected docs/phase2-tests/${exe}.exe or ${exe})"
+              ls -la "$D/docs/phase2-tests/"
+              exit 1
+            fi
+          done
+          for asm in arm64trap arm64trap_no_fix; do
+            if [ -f "$D/docs/phase2-tests/${asm}.s" ]; then
+              cp "$D/docs/phase2-tests/${asm}.s" "$STAGE/"
+            else
+              echo "::warning::${asm}.s not found (assembly not staged)"
+            fi
+          done
           if [ -f "$D/docs/phase2-tests/neontest.exe" ]; then
             cp "$D/docs/phase2-tests/neontest.exe" "$STAGE/"
           elif [ -f "$D/docs/phase2-tests/neontest" ]; then
@@ -423,26 +467,49 @@ jobs:
           exit 0
         shell: pwsh
 
-      # Bounty Boss first: try...finally + exit. Keep going on failure so we run Verify ppca64 too.
-      - name: Run Bounty Boss test (try...finally + exit)
+      # Bounty Boss: run both fix and no-fix versions so we can compare behaviour.
+      - name: Run Bounty Boss test – with fix (arm64trap.exe)
         id: bounty_boss
         run: |
           Set-Location $env:GITHUB_WORKSPACE
           $root = if (Test-Path phase2-arm64-exes) { 'phase2-arm64-exes' } elseif (Test-Path arm64-exes) { 'arm64-exes' } else { '.' }
           $dir = if (Test-Path (Join-Path $root 'arm64trap.exe')) { $root } else { (Join-Path $root 'arm64-exes') }
           Push-Location $dir
+          Write-Host "=== arm64trap.exe (with fix) ==="
           $out = .\arm64trap.exe 2>&1 | Out-String
           Pop-Location
           Write-Host $out
           $ok = $false
           if ($out -match 'Success: Finally block executed!') {
             if ($out -notmatch 'Done\.') { Write-Host "Warning: 'Done.' not in output (exit-path crash or buffering); finally block did run." }
-            Write-Host "Bounty Boss test passed (finally block executed)."
+            Write-Host "Bounty Boss (fix): passed (finally block executed)."
             $ok = $true
           } else {
-            Write-Error "Bounty Boss failed: expected 'Success: Finally block executed!'. Got: $out"
+            Write-Host "Bounty Boss (fix) failed: expected 'Success: Finally block executed!'. Got: $out"
           }
           echo "bounty_boss_ok=$ok" >> $env:GITHUB_OUTPUT
+        shell: pwsh
+
+      - name: Run Bounty Boss test – no fix (arm64trap_no_fix.exe)
+        id: bounty_boss_no_fix
+        run: |
+          Set-Location $env:GITHUB_WORKSPACE
+          $root = if (Test-Path phase2-arm64-exes) { 'phase2-arm64-exes' } elseif (Test-Path arm64-exes) { 'arm64-exes' } else { '.' }
+          $dir = if (Test-Path (Join-Path $root 'arm64trap_no_fix.exe')) { $root } else { (Join-Path $root 'arm64-exes') }
+          Push-Location $dir
+          Write-Host "=== arm64trap_no_fix.exe (no fix) ==="
+          $out = .\arm64trap_no_fix.exe 2>&1 | Out-String
+          Pop-Location
+          Write-Host $out
+          $ok = $false
+          if ($out -match 'Success: Finally block executed!') {
+            if ($out -notmatch 'Done\.') { Write-Host "Warning: 'Done.' not in output." }
+            Write-Host "Bounty Boss (no-fix): passed (finally block executed)."
+            $ok = $true
+          } else {
+            Write-Host "Bounty Boss (no-fix) failed: expected 'Success: Finally block executed!'. Got: $out"
+          }
+          echo "bounty_boss_no_fix_ok=$ok" >> $env:GITHUB_OUTPUT
         shell: pwsh
 
       # ppca64 may raise EExternalException on exit. Keep going on failure so we can see both results.
@@ -482,14 +549,15 @@ jobs:
           echo "ppca64_ok=$ok" >> $env:GITHUB_OUTPUT
         shell: pwsh
 
-      # Fail the job only if either Bounty Boss or Verify ppca64 failed (so we see both results).
+      # Fail the job only if any of Bounty Boss (fix), Bounty Boss (no-fix), or Verify ppca64 failed.
       - name: Fail if Bounty Boss or Verify ppca64 failed
         run: |
           $boss = "${{ steps.bounty_boss.outputs.bounty_boss_ok }}"
+          $bossNoFix = "${{ steps.bounty_boss_no_fix.outputs.bounty_boss_no_fix_ok }}"
           $ppc = "${{ steps.verify_ppca64.outputs.ppca64_ok }}"
-          Write-Host "Bounty Boss ok: $boss; ppca64 ok: $ppc"
-          if ($boss -ne 'true' -or $ppc -ne 'true') {
-            Write-Error "One or more checks failed (Bounty Boss: $boss, ppca64: $ppc). See logs above."
+          Write-Host "Bounty Boss (fix) ok: $boss; Bounty Boss (no-fix) ok: $bossNoFix; ppca64 ok: $ppc"
+          if ($boss -ne 'true' -or $bossNoFix -ne 'true' -or $ppc -ne 'true') {
+            Write-Error "One or more checks failed (Bounty Boss fix: $boss, no-fix: $bossNoFix, ppca64: $ppc). See logs above."
             exit 1
           }
           Write-Host "All checks passed."
