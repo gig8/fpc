@@ -311,7 +311,8 @@ jobs:
             find "$D" -maxdepth 5 -name 'ppca64*' 2>/dev/null || true
             exit 1
           fi
-          cp "$PPC64" "$STAGE/ppca64"
+          # Stage as ppca64.exe so Windows runner has a proper .exe (run/exit-code capture works reliably)
+          cp "$PPC64" "$STAGE/ppca64.exe"
           echo "Staged in $STAGE:"; ls -la "$STAGE/"
 
       - name: Upload arm64 executables and ppca64
@@ -327,7 +328,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Artifact "phase2-arm64-exes" is the arm64-exes/ dir; download extracts to workspace.
+      # Artifact "phase2-arm64-exes": download extracts to workspace/phase2-arm64-exes/ (artifact name).
+      # Upload came from Linux dir arm64-exes/, so contents may be at phase2-arm64-exes/ or phase2-arm64-exes/arm64-exes/.
       - name: Download arm64 executables
         uses: actions/download-artifact@v4
         with:
@@ -337,15 +339,17 @@ jobs:
       - name: List artifact contents (sanity check)
         run: |
           Set-Location $env:GITHUB_WORKSPACE
-          $dir = if (Test-Path arm64-exes) { 'arm64-exes' } else { '.' }
-          Write-Host "Artifact contents ($dir):"
+          $root = if (Test-Path phase2-arm64-exes) { 'phase2-arm64-exes' } elseif (Test-Path arm64-exes) { 'arm64-exes' } else { '.' }
+          $dir = if (Test-Path (Join-Path $root 'arm64-exes')) { (Join-Path $root 'arm64-exes') } else { $root }
+          Write-Host "Artifact root: $root; exe dir: $dir"
           Get-ChildItem $dir -ErrorAction SilentlyContinue | Format-Table Name, Length -AutoSize
         shell: pwsh
 
       - name: Run hello.exe and trap.exe
         run: |
           Set-Location $env:GITHUB_WORKSPACE
-          $dir = if (Test-Path arm64-exes\hello.exe) { 'arm64-exes' } else { '.' }
+          $root = if (Test-Path phase2-arm64-exes) { 'phase2-arm64-exes' } elseif (Test-Path arm64-exes) { 'arm64-exes' } else { '.' }
+          $dir = if (Test-Path (Join-Path $root 'hello.exe')) { $root } elseif (Test-Path (Join-Path $root 'arm64-exes\hello.exe')) { (Join-Path $root 'arm64-exes') } else { '.' }
           Push-Location $dir
           .\hello.exe
           $out = .\trap.exe 2>&1 | Out-String
@@ -362,7 +366,8 @@ jobs:
       - name: Verify SEH unwind tables (dumpbin /pdata)
         run: |
           Set-Location $env:GITHUB_WORKSPACE
-          $dir = if (Test-Path arm64-exes\trap.exe) { 'arm64-exes' } else { '.' }
+          $root = if (Test-Path phase2-arm64-exes) { 'phase2-arm64-exes' } elseif (Test-Path arm64-exes) { 'arm64-exes' } else { '.' }
+          $dir = if (Test-Path (Join-Path $root 'trap.exe')) { $root } else { (Join-Path $root 'arm64-exes') }
           $trapExe = Join-Path $dir 'trap.exe'
           if (-not (Test-Path $trapExe)) { Write-Host "trap.exe not found, skipping dumpbin"; exit 0 }
           $dumpbin = $null
@@ -393,7 +398,8 @@ jobs:
       - name: Run NEON vector test (SIMD performance validation)
         run: |
           Set-Location $env:GITHUB_WORKSPACE
-          $dir = if (Test-Path arm64-exes\neontest.exe) { 'arm64-exes' } else { '.' }
+          $root = if (Test-Path phase2-arm64-exes) { 'phase2-arm64-exes' } elseif (Test-Path arm64-exes) { 'arm64-exes' } else { '.' }
+          $dir = if (Test-Path (Join-Path $root 'neontest.exe')) { $root } else { (Join-Path $root 'arm64-exes') }
           $exe = Join-Path $dir 'neontest.exe'
           if (-not (Test-Path $exe)) {
             Write-Host "neontest.exe not in artifact (neontest.pas optional), skipping NEON test"
@@ -414,13 +420,14 @@ jobs:
       - name: Verify ppca64 (Phase 3 native compiler)
         run: |
           Set-Location $env:GITHUB_WORKSPACE
-          $dir = if (Test-Path arm64-exes\ppca64) { 'arm64-exes' } elseif (Test-Path arm64-exes\ppca64.exe) { 'arm64-exes' } else { '.' }
+          $root = if (Test-Path phase2-arm64-exes) { 'phase2-arm64-exes' } elseif (Test-Path arm64-exes) { 'arm64-exes' } else { '.' }
+          $dir = if (Test-Path (Join-Path $root 'arm64-exes')) { (Join-Path $root 'arm64-exes') } else { $root }
           Write-Host "Looking for ppca64 in: $dir"; Get-ChildItem $dir -ErrorAction SilentlyContinue
           $ppc = $null
-          foreach ($cand in @("$dir\ppca64.exe", "$dir\ppca64", 'arm64-exes\ppca64.exe', 'arm64-exes\ppca64', 'compiler\ppca64.exe', 'compiler\ppca64', 'ppca64.exe', 'ppca64')) {
+          foreach ($cand in @((Join-Path $dir 'ppca64.exe'), (Join-Path $dir 'ppca64'), (Join-Path $env:GITHUB_WORKSPACE 'ppca64.exe'), (Join-Path $env:GITHUB_WORKSPACE 'ppca64'), 'compiler\ppca64.exe', 'compiler\ppca64', 'ppca64.exe', 'ppca64')) {
             if (Test-Path $cand) { $ppc = (Resolve-Path $cand).Path; break }
           }
-          if (-not $ppc) { Write-Error 'ppca64 not found'; exit 1 }
+          if (-not $ppc) { Write-Error "ppca64 not found (searched $dir, $root, compiler, .)"; exit 1 }
           Write-Host "Running: $ppc -iV"
           $ver = & $ppc '-iV' 2>&1
           $exitCode = $LASTEXITCODE
@@ -436,7 +443,8 @@ jobs:
       - name: Run Bounty Boss test (try...finally + exit)
         run: |
           Set-Location $env:GITHUB_WORKSPACE
-          $dir = if (Test-Path arm64-exes\arm64trap.exe) { 'arm64-exes' } else { '.' }
+          $root = if (Test-Path phase2-arm64-exes) { 'phase2-arm64-exes' } elseif (Test-Path arm64-exes) { 'arm64-exes' } else { '.' }
+          $dir = if (Test-Path (Join-Path $root 'arm64trap.exe')) { $root } else { (Join-Path $root 'arm64-exes') }
           Push-Location $dir
           $out = .\arm64trap.exe 2>&1 | Out-String
           Pop-Location
