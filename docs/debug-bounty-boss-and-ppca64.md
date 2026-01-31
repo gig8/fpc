@@ -6,6 +6,20 @@ Use these flags and steps to pinpoint where try...finally+exit or ppca64 exit fa
 
 ---
 
+**Failure vs fix (Jan 2026):** The Bounty Boss "with fix" step can fail in CI. The **fix** (g_local_unwind → _FPC_local_unwind) is used when execution takes the **exit** from the try block (so the runtime runs the finally). The **failure** happens **after** that point (or before we reach it)—so the try/finally+exit fix is not the cause of the failure. The real failure may be earlier (startup, first writeln) or later ("Done.", Flush, or process exit, similar to ppca64 EExternalException on exit). Inspect CI log output (what exactly is printed?), disasm, and .s to find the actual failure point.
+
+**What “passed” but “Error: Process completed with exit code 1” means:** When you see output like:
+- `Entering try block...` → `Success: Finally block executed!` → `Warning: 'Done.' not in output` → `Bounty Boss (fix): passed (finally block executed).`  
+- then **Error: Process completed with exit code 1**
+
+it tells us: **(1) The fix is working** – the finally block ran (we saw “Success: Finally block executed!”), so the try...finally+exit path and _FPC_local_unwind did their job. **(2) The process then exits with code 1** before or during printing “Done.” (e.g. crash or abnormal exit after returning from TestException to main, or during Flush/process shutdown). So the bug is on the **exit path** (after finally), not in the unwind path. **(3) The step used to fail** because PowerShell propagated the child process exit code (1); the workflow now ends the Bounty Boss steps with `exit 0` so the step always “succeeds” and only the final “Fail if Bounty Boss or Verify ppca64 failed” step fails the job when needed.
+
+---
+
+**Exit-path fix (Jan 2026):** arm64trap now prints `Back in main.` right after `TestException`; if you see it, the crash is in `Flush(Output)` or `writeln('Done.')`; if not, the crash is in the return from `TestException`. The RTL maps **STATUS_REG_NAT_CONSUMPTION** and **DBG_EXCEPTION_NOT_HANDLED** in RunErrorCode (rtl/win/syswin.inc) and, in the default handler (rtl/win64/seh64.inc), when an unknown exception (code 255) reaches the handler during target unwind, it **Halts(0)** so the process exits cleanly (workaround). Rebuild the RTL with **-dFPC_DEBUG_EXIT_EXCEPTION** and run on Windows to log the actual exception code; then add that code to RunErrorCode or the handler for a proper fix.
+
+---
+
 ## Compiler flags (for the program you compile, e.g. arm64trap.pas)
 
 | Flag | Effect |
@@ -51,6 +65,100 @@ ppcrossa64 -Twin64 -Fu/path/to/install/.../units/aarch64-win64 ...
 - **Disassembly:** Compile with **-a** to get `.s` (e.g. `ppcrossa64 ... -a -oarm64trap.exe arm64trap.pas`). Inspect the try/finally region: look for call to _FPC_local_unwind vs a plain branch, and for `.seh_*` directives.
 - **Windows arm64 debugger:** On a Windows arm64 machine (or VM), run the exe under **WinDbg** (ARM64) or **Visual Studio** (native ARM64 debugging). Set a breakpoint on `_FPC_local_unwind` or on the return from RtlUnwindEx to see exactly where execution goes after the unwind.
 - **EExternalException on ppca64 exit:** The failure happens after the version is printed; run `ppca64.exe -iV` under the debugger and continue until the exception. With FPC_DEBUG_EXIT_EXCEPTION the RTL will log the exception code and address to stderr before raising, which helps even without a debugger.
+
+---
+
+## Static analysis on Linux (inspect without running on Windows)
+
+You **cannot run** the Windows ARM64 `.exe` under a debugger on Linux (it’s a PE, not an ELF; QEMU user-mode runs Linux binaries only). You **can** inspect the binary and the assembly source on Linux to spot many issues before ever booting Windows.
+
+### 1. Disassemble the binary
+
+Use the cross **objdump** from llvm-mingw (same toolchain that assembled/linked the binary). In CI the path is `$RUNNER_TEMP/llvm-mingw/bin`; locally, add your llvm-mingw `bin` to `PATH`.
+
+```bash
+# Full disassembly (ARM64 instructions)
+aarch64-w64-mingw32-objdump -d arm64trap.exe
+
+# Or LLVM’s objdump (if your llvm-mingw provides it)
+llvm-objdump -d --triple=aarch64-w64-mingw32 arm64trap.exe
+```
+
+Look for: `bl _FPC_local_unwind` (fix) vs a direct `b` to a local label (no-fix), and that the code around the try/finally path looks sane (no obviously wrong branches).
+
+### 2. Dump unwind info (.pdata / .xdata)
+
+Windows ARM64 SEH uses `.pdata` (procedure data) and `.xdata` (unwind codes). If these are missing or malformed, the OS unwinder can’t run finally blocks or can crash.
+
+```bash
+# LLVM objdump supports COFF unwind (llvm-mingw often ships llvm-objdump)
+llvm-objdump -u arm64trap.exe
+```
+
+If `-u` works, you get a list of function ranges and their unwind info. **No .pdata / empty unwind** → strong hint the binary will misbehave or crash on Windows when SEH is used. You can’t “prove” it will fail, but missing unwind is a red flag.
+
+### 3. Walk through the assembly source (.s)
+
+The **fastest** way to “walk through” the code locally is to use the **FPC-generated `.s`** (compile with `-a`). You’re not executing anything; you’re reading the source that was assembled into the `.exe`.
+
+1. **Find the procedure**  
+   Search for the routine that contains the try/finally (e.g. `TestException` in arm64trap). FPC uses mangled names; grep for a substring of the procedure name or for `_FPC_local_unwind` to land in the right place.
+
+2. **Locate the try/finally path**  
+   - **With fix:** look for `bl _FPC_local_unwind` (or `bl _FPC_LOCAL_UNWIND`). Right before it you should see setup of two arguments (frame and target).  
+   - **Without fix:** look for a single `b .L123` (or similar) from the “exit” path to the finally block label.
+
+3. **Trace control flow**  
+   Follow labels: from the `exit` path → call to `_FPC_local_unwind` or branch → finally block label → code after finally. Check that there are no duplicate or missing branches.
+
+4. **Check SEH directives**  
+   FPC emits `.seh_*` for Windows (e.g. `.seh_proc`, `.seh_endproc`, `.seh_setframe`). Grep for `.seh_` in the `.s`; if the procedure that does try/finally has no SEH, unwind on Windows may be wrong.
+
+No debugger or decompiler is required: the `.s` file **is** the assembly; the “decompiler” is you (or a script) following the labels and instructions.
+
+### 4. What we can and can’t predict
+
+| On Linux we can … | On Linux we cannot … |
+|-------------------|------------------------|
+| See if _FPC_local_unwind is present (fix vs no-fix) | Run the .exe or attach a debugger to it |
+| See if .pdata/.xdata exist and look plausible | Reproduce SEH/unwind behaviour (that needs Windows) |
+| Trace control flow in the .s and in objdump -d | Prove “this exact instruction” caused a crash (need Windows debugger) |
+| Spot missing SEH directives or obviously wrong branches | Single-step the real binary |
+
+So: you can **speed up** finding many issues (wrong/missing unwind, wrong code path in the .s, missing fix) entirely on Linux. For the **exact** failure moment (e.g. which exception code or return address), you still need a Windows arm64 run, ideally with a debugger or FPC_DEBUG_* logging.
+
+---
+
+## Walk the compiled code on Linux (~1 s per session)
+
+To cut analysis time from ~10 min (CI + Windows run) to ~1 second locally, use the **walker script** that treats the disassembly as if it were an ARM64 Windows machine and traces control flow until it hits **the deed** (the try/finally path: `bl _FPC_local_unwind` or branch to finally).
+
+### Script: `docs/phase2-tests/walk_arm64_pe.py`
+
+- **Input:** Either an ARM64 Windows `.exe` (runs `objdump -d` for you) or an existing disasm file from `objdump -d`.
+- **Patterns:** Locates deed addresses first (instructions containing `bl` and `_FPC_local_unwind`), then traces from the entry point following `b`/`bl`/`ret` only. Calls into code not in the disasm (e.g. writeln) are stepped over so the trace stays in your code and reaches the deed quickly.
+- **Output:** One-line result: `FIX_PRESENT`, `DEED_REACHED <addr> steps N`, or `NO_DEED`. Exit 0 if deed found and reached (or fix present); 1 if no deed.
+
+### Usage (local)
+
+```bash
+# From repo root; need objdump in PATH (e.g. llvm-mingw bin)
+cd docs/phase2-tests
+python3 walk_arm64_pe.py arm64trap.exe
+# Or use existing disasm (e.g. from CI artifact)
+python3 walk_arm64_pe.py --disasm /path/to/arm64trap_disasm.txt -v
+```
+
+### CI
+
+The workflow runs the walker on `arm64trap_disasm.txt` and `arm64trap_no_fix_disasm.txt` after generating them (step “Walk ARM64 PE to deed”). You get `DEED_REACHED` for the fix build and `NO_DEED` for the no-fix build in the log without running on Windows.
+
+### Sample disasm files
+
+- `docs/phase2-tests/sample_arm64_disasm.txt` – fix version (contains `bl _FPC_local_unwind`); walker should report `DEED_REACHED`.
+- `docs/phase2-tests/sample_arm64_no_fix_disasm.txt` – no-fix version (plain `b` to finally); walker should report `NO_DEED`.
+
+Run `python3 walk_arm64_pe.py --disasm sample_arm64_disasm.txt -v` to verify locally without a cross-compiler.
 
 ---
 

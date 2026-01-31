@@ -151,6 +151,9 @@ begin
     STATUS_PRIVILEGED_INSTRUCTION:      result := 218;    { rePrivilegedInstruction }
     STATUS_FLOAT_MULTIPLE_TRAPS,
     STATUS_FLOAT_MULTIPLE_FAULTS:       result := -255;   { indicate FPU reset }
+    { ARM64 / exit-path: map so we do not treat as completely unknown; use FPC_DEBUG_EXIT_EXCEPTION to see code }
+    STATUS_REG_NAT_CONSUMPTION:        result := 255;     { ARM64/IA64; can occur during unwind }
+    DBG_EXCEPTION_NOT_HANDLED:         result := 255;     { delivered when exception not handled }
   else
     result := 255;                                        { reExternalException }
   end;

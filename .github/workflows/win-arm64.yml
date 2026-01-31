@@ -303,6 +303,52 @@ jobs:
           fi
           echo "::endgroup::"
 
+      # Static analysis on Linux: disassemble and dump unwind so we can inspect without Windows.
+      - name: Disassemble and dump unwind (static analysis on Linux)
+        run: |
+          D="$GITHUB_WORKSPACE/docs/phase2-tests"
+          STAGE="$GITHUB_WORKSPACE/arm64-exes"
+          PATH="$RUNNER_TEMP/llvm-mingw/bin:$PATH"
+          OBJDUMP=""
+          for cand in aarch64-w64-mingw32-objdump llvm-objdump; do
+            if command -v "$cand" >/dev/null 2>&1; then OBJDUMP="$cand"; break; fi
+          done
+          if [ -z "$OBJDUMP" ]; then
+            echo "::warning::No objdump found (aarch64-w64-mingw32-objdump or llvm-objdump); static analysis skipped"
+            exit 0
+          fi
+          mkdir -p "$STAGE"
+          for exe in arm64trap arm64trap_no_fix; do
+            if [ ! -f "$D/${exe}.exe" ]; then continue; fi
+            echo "::group::Disassembly: ${exe}.exe"
+            "$OBJDUMP" -d "$D/${exe}.exe" > "$STAGE/${exe}_disasm.txt" 2>/dev/null || true
+            head -200 "$STAGE/${exe}_disasm.txt" || true
+            echo "::endgroup::"
+            if [ "$OBJDUMP" = "llvm-objdump" ]; then
+              echo "::group::Unwind info: ${exe}.exe"
+              "$OBJDUMP" -u "$D/${exe}.exe" > "$STAGE/${exe}_unwind.txt" 2>/dev/null || true
+              cat "$STAGE/${exe}_unwind.txt" || true
+              echo "::endgroup::"
+            else
+              touch "$STAGE/${exe}_unwind.txt"
+              echo "::notice::llvm-objdump not used; unwind dump skipped (use llvm-objdump -u for .pdata/.xdata)"
+            fi
+          done
+          echo "Staged disasm/unwind in $STAGE (in artifact for offline inspection)."
+
+      # Walk disassembly to find "the deed" (try/finally path) without running on Windows (~1s).
+      - name: Walk ARM64 PE to deed (static trace)
+        run: |
+          D="$GITHUB_WORKSPACE/docs/phase2-tests"
+          STAGE="$GITHUB_WORKSPACE/arm64-exes"
+          for name in arm64trap arm64trap_no_fix; do
+            disasm="$STAGE/${name}_disasm.txt"
+            if [ ! -f "$disasm" ]; then continue; fi
+            echo "::group::Walk $name"
+            python3 "$D/walk_arm64_pe.py" --disasm "$disasm" -v 2>&1 || true
+            echo "::endgroup::"
+          done
+
       - name: List expected exe locations (diagnostic)
         run: |
           D="$GITHUB_WORKSPACE"
@@ -481,13 +527,15 @@ jobs:
           Write-Host $out
           $ok = $false
           if ($out -match 'Success: Finally block executed!') {
-            if ($out -notmatch 'Done\.') { Write-Host "Warning: 'Done.' not in output (exit-path crash or buffering); finally block did run." }
+            if ($out -notmatch 'Done\.') { Write-Host "Warning: 'Done.' not in output (exit-path crash or buffering); finally block did run. Check for 'Back in main.' to narrow (if present, crash is in Flush/writeln; if absent, in return from TestException)." }
+            if ($out -match 'Back in main\.') { Write-Host "Back in main: return from TestException OK; crash is in Flush(Output) or writeln('Done.')." }
             Write-Host "Bounty Boss (fix): passed (finally block executed)."
             $ok = $true
           } else {
             Write-Host "Bounty Boss (fix) failed: expected 'Success: Finally block executed!'. Got: $out"
           }
           echo "bounty_boss_ok=$ok" >> $env:GITHUB_OUTPUT
+          exit 0
         shell: pwsh
 
       - name: Run Bounty Boss test – no fix (arm64trap_no_fix.exe)
@@ -510,6 +558,7 @@ jobs:
             Write-Host "Bounty Boss (no-fix) failed: expected 'Success: Finally block executed!'. Got: $out"
           }
           echo "bounty_boss_no_fix_ok=$ok" >> $env:GITHUB_OUTPUT
+          exit 0
         shell: pwsh
 
       # ppca64 may raise EExternalException on exit. Keep going on failure so we can see both results.

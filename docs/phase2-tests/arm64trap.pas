@@ -19,6 +19,7 @@ end;
 
 begin
   TestException;
+  writeln('Back in main.');   { narrow exit-path crash: if we see this, return from TestException worked }
   Flush(Output);
   writeln('Done.');
   Flush(Output);

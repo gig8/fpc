@@ -1,0 +1,22 @@
+arm64trap_no_fix.exe:  file format pei-aarch64-little
+
+Disassembly of section .text:
+
+0000000140001000 <P$PROGRAM$ARM64TRAP>:
+    140001000:	d503237f 	pacibsp
+    140001004:	a9bf7bfd 	stp	x29, x30, [sp, #-16]!
+    140001008:	910003fd 	mov	x29, sp
+    14000100c:	94000010 	bl	14000104c <P$TESTEXCEPTION>
+    140001010:	d65f03c0 	ret
+
+000000014000104c <P$TESTEXCEPTION>:
+    14000104c:	d503237f 	pacibsp
+    140001050:	a9bf7bfd 	stp	x29, x30, [sp, #-16]!
+    140001054:	910003fd 	mov	x29, sp
+    140001058:	94000030 	bl	1400010e0 <U_$SYSTEM_$$_WRITELN$SHORTSTRING$$LONGINT>
+    14000105c:	14000008 	b	14000107c
+    140001060:	d65f03c0 	ret
+
+000000014000107c:
+    14000107c:	94000028 	bl	1400010e0 <U_$SYSTEM_$$_WRITELN$SHORTSTRING$$LONGINT>
+    140001080:	d65f03c0 	ret

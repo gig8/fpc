@@ -117,8 +117,12 @@ We don’t know for certain. Phase 2 only proved that **one** SEH case works: a 
 
 - **Goal:** arm64trap.exe (try...finally + exit) must run on Windows arm64 and print "Success: Finally block executed!" and "Done." CI runs it last.
 - **Status:** Fixes implemented and pushed: (1) compiler `tcgaarch64.g_local_unwind` for aarch64-win64 calls `_FPC_local_unwind(SP, target)`; (2) RTL declares `_fpc_local_unwind` in the win64 system unit **interface** (rtl/win64/system.pp under SYSTEM_USE_WIN_SEH) so the symbol is in the globalsymtable and written to system.ppu; (3) compiler `search_system_proc` tries Find(upper(s)) when find(s) fails (symtable.pas); (4) CI finds/copies ppcrossa64 when cache misses; cache key -v5. **Next:** Confirm CI run for current HEAD is fully green, then proceed to Phase 4 (make cycle).
+- **Failure vs fix (Jan 2026):** CI [Run Bounty Boss test – with fix](https://github.com/gig8/fpc/actions/runs/21546680985/job/62089204299) fails (exit code 1). The **fix** (g_local_unwind / _FPC_local_unwind) applies when we take the **exit** from the try block so the OS runs the finally. The **failure** occurs **after** that point (or before we reach it)—so the missing/wrong local-unwind path is **not** why the test fails. The fix may still be an error to fix for correct semantics when that path is reached, but the current failure is elsewhere (e.g. before "Entering try block...", or on "Done."/Flush/process exit). Use local analysis (disasm, unwind, .s walk) or Windows debugger to find the actual failure point.
 - **CI (Jan 2026):** We now build and run **both** Bounty Boss versions for comparison: **arm64trap.exe** (with fix) and **arm64trap_no_fix.exe** (compiled with `-dFPC_NO_WIN64_LOCAL_UNWIND`). Both are compiled with **-a** so we get **arm64trap.s** and **arm64trap_no_fix.s**. A "Verify assembly patterns" step greps the .s files to confirm fix version contains `_FPC_local_unwind` and no-fix version does not. The artifact includes both .exe and .s files. See **docs/debug-bounty-boss-and-ppca64.md** § "Assembly patterns".
 - **Optimization:** CI uses **default** (no `-O`), so no optimizer switches. If the failure were optimization-related (e.g. peephole or stack-frame opt cutting something), it could appear only with `-O2`/`-O3`. See **docs/debug-bounty-boss-and-ppca64.md** § "Optimization flags" for how to test with `-O1`, `-O2`, `-O3`, `-Os`.
+- **Static analysis on Linux:** You can’t run the Windows .exe under a debugger on Linux, but you can disassemble it (`objdump -d`), dump unwind (`llvm-objdump -u`), and walk through the FPC-generated `.s` to trace the try/finally path and spot missing/bad unwind. CI now runs objdump on arm64trap.exe and stages `*_disasm.txt` and `*_unwind.txt` in the artifact. See **docs/debug-bounty-boss-and-ppca64.md** § "Static analysis on Linux".
+- **Walk the bits (~1 s):** **docs/phase2-tests/walk_arm64_pe.py** parses objdump disassembly, finds "the deed" (bl _FPC_local_unwind), and traces control flow from entry to that instruction so you can confirm fix/no-fix locally without Windows. CI runs it on the staged disasm files. See **docs/debug-bounty-boss-and-ppca64.md** § "Walk the compiled code on Linux".
+- **Exit-path fix (Jan 2026):** arm64trap prints `Back in main.` after `TestException` to narrow the crash (if seen: crash in Flush/writeln; if not: crash in return from TestException). RTL maps STATUS_REG_NAT_CONSUMPTION and DBG_EXCEPTION_NOT_HANDLED in RunErrorCode (syswin.inc) and, in the default handler (seh64.inc), unknown (code 255) during target unwind now **Halts(0)** so the process exits cleanly (workaround). Use **-dFPC_DEBUG_EXIT_EXCEPTION** when rebuilding RTL to log the real exception code for a proper fix. See **docs/debug-bounty-boss-and-ppca64.md** § "Exit-path fix".
 
 ---
 
@@ -409,6 +413,12 @@ Strategy: **Public–Private multi-stage launch** (see `docs/gemini-conversation
 - **Phase 3 clarity:** “Native” compiler = Windows arm64 PE produced by ppcrossa64; output name is ppca64 (ppca64.exe on Windows). Phase 3 may require building the compiler sub-tree for aarch64-win64 and taking that binary; exact make target is to be confirmed when Phase 1–2 are done.
 - **Hardware:** Phases 4–6 need Windows arm64; plan allows QEMU or GitHub Actions if no real hardware.
 - **Contingencies:** Each phase has an “If it fails” row or paragraph so we don’t block without a next action.
+
+---
+
+## Notes (Jan 2026)
+
+- **Bounty Boss failure vs fix:** The CI step "Run Bounty Boss test – with fix (arm64trap.exe)" can fail. The **fix** (g_local_unwind / _FPC_local_unwind) applies when we take the **exit** from the try block so the OS runs the finally. The **failure** occurs **after** that point (or before we reach it)—so the try/finally+exit fix is **not** why the test fails. The real failure is elsewhere (e.g. startup, first writeln, or "Done."/Flush/process exit). See §2.7 and **docs/debug-bounty-boss-and-ppca64.md**; use CI log output, disasm, and .s walk to find the actual failure point.
 
 ---
 
