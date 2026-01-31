@@ -22,10 +22,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install host FPC
+      - name: Install build tools and host FPC
         run: |
           sudo apt-get update
-          sudo apt-get install -y fpc
+          sudo apt-get install -y build-essential fpc
+          make -v
           fpc -iV
 
       - name: Cache llvm-mingw
@@ -60,7 +61,7 @@ jobs:
       - name: Cross-install FPC aarch64-win64
         if: steps.cache_fpc.outputs.cache-hit != 'true'
         run: |
-          make crossinstall -j$(nproc) \
+          make crossinstall -j4 \
             CPU_TARGET=aarch64 \
             OS_TARGET=win64 \
             FPC=/usr/bin/fpc \
