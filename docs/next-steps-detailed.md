@@ -1,0 +1,263 @@
+# Detailed next steps – Windows aarch64 bounty
+
+Step-by-step plan with checkpoints, verification, and contingencies. Re-checked for order, dependencies, and bounty coverage.
+
+---
+
+## Where we are
+
+| Phase | Status | Next |
+|-------|--------|------|
+| 1 – Cross-build in WSL | [x] Done | – |
+| 2 – Validate binaries & SEH | [x] Done (static) | [ ] Run hello/trap on Windows arm64 when available |
+| 3 – Native ppca64.exe | [ ] Next | Build compiler for aarch64-win64 with ppcrossa64 |
+| 4 – Self-hosting (cycle) | [ ] | Run make cycle on Windows arm64 |
+| 5 – Lazarus | [ ] | Build Lazarus with toolchain |
+| 6 – Shell ext / WinRE | [ ] | Build & test shell extension, WinRE if required |
+| 7 – Upstream | [ ] | PR, sponsor comment, FPC acceptance |
+
+---
+
+## Bounty requirements (checklist)
+
+- [x] FPC produces **pure arm64** Windows binaries (not arm64ec)
+- [ ] **Lazarus** compiles with the toolchain
+- [ ] Toolchain works to **rebuild projects**
+- [ ] **Shell extensions** load as pure arm64 in File Explorer’s explorer.exe
+- [ ] Other scenarios (e.g. **Windows Recovery Environment**) as specified
+- [ ] Changes **accepted by FPC developers** and **in FPC trunk**
+- [ ] **Pull request** and patches published for testing
+- [ ] **Sponsor comment** in all modified units (client name, website, GitHub fork link)
+
+---
+
+## Phase 1: Complete cross-build in WSL
+
+- [x] **Phase 1 done**
+
+**Goal:** `make crossinstall` finishes so we have a working `ppcrossa64` plus aarch64-win64 RTL/units.
+
+### 1.1 Run crossinstall (no `-ClvLLVM`)
+
+- [x] Run `make crossinstall` with correct flags (no `-ClvLLVM`, BINUTILSPREFIX, CROSSOPT)
+
+```bash
+cd ~/Projects/gig8/fpc   # or your FPC source dir
+make clean
+make crossinstall -j$(nproc) \
+  CPU_TARGET=aarch64 \
+  OS_TARGET=win64 \
+  FPC=/usr/bin/fpc \
+  BINUTILSPREFIX=aarch64-w64-mingw32- \
+  CROSSOPT="-FD/opt/llvm-mingw/bin" \
+  INSTALL_PREFIX=~/Projects/gig8/fpc_install
+```
+
+### 1.2 Checkpoint
+
+- [x] `ppcrossa64` exists (build dir or install; e.g. `compiler/ppcrossa64` or `.../lib/fpc/3.3.1/ppcrossa64`)
+- [x] `$(INSTALL_PREFIX)/lib/fpc/$(version)/units/aarch64-win64/` contains RTL (system.ppu, rtl/, rtl-objpas/, packages)
+
+### 1.3 If Phase 1 fails
+
+| Symptom | Likely cause | Action |
+|--------|---------------|--------|
+| Linker “undefined reference” or “cannot find -l…” | Missing lib path or wrong CRT | Add `-Fl/opt/llvm-mingw/…` (lib dir) to CROSSOPT or check rtl/win64 Makefile |
+| Assembler “unknown directive” or “invalid instruction” | Wrong triple / asm syntax | Confirm BINUTILSPREFIX invokes llvm-mingw’s clang; check agcpugas triple for win64 |
+| “Unit not found: system” or path errors | Unit path not set for target | Ensure INSTALL_PREFIX is used consistently; run from FPC source root |
+| Still “Illegal parameter” | Leftover -ClvLLVM somewhere | Search Makefile, .cfg, env for ClvLLVM and remove |
+
+---
+
+## Phase 2: Validate binaries and SEH
+
+- [x] **Phase 2 done** (static checks; runtime on Windows arm64 still deferred)
+
+**Goal:** Confirm we produce valid PE/COFF arm64 and catch SEH issues early (before cycle/Lazarus).
+
+### 2.1 Hello world
+
+- [x] Create `hello.pas` (in `docs/phase2-tests/`)
+- [x] Compile with `-XPaarch64-w64-mingw32-` and unit paths; produce `hello.exe`
+- Compile (use **-XPaarch64-w64-mingw32-** so the assembler/linker are found; llvm-mingw uses that prefix, not `aarch64-win64-`):
+  ```bash
+  export PATH=/opt/llvm-mingw/bin:$PATH
+  ppcrossa64 -Twin64 -XPaarch64-w64-mingw32- -Fu$(INSTALL_PREFIX)/lib/fpc/3.3.1/units/aarch64-win64/rtl -Fu.../rtl-objpas -FE. -FD/opt/llvm-mingw/bin -ohello.exe hello.pas
+  ```
+  (Adjust unit path to match your install.)
+
+### 2.2 Checkpoint – PE is arm64
+
+- [x] Run `aarch64-w64-mingw32-objdump -p hello.exe` → **file format coff-arm64**
+
+### 2.3 Exception trap (SEH stress)
+
+- [x] Create `trap.pas` with `{$mode objfpc}`, try/except, `raise Exception.Create('The Unwind Trap')`
+- [x] Compile `trap.exe`; compile with `-a` → `trap.s`
+- [x] Inspect `trap.s`: `.pdata`/`.xdata`, unwind, `__FPC_specific_handler` present
+- [ ] (Optional) Compare unwind with [Microsoft ARM64 PCS](https://docs.microsoft.com/en-us/cpp/build/arm64-windows-abi-conventions) (stack alignment, KNONVOLATILE_CONTEXT_POINTERS 80 bytes)
+
+### 2.4 Checkpoint – run on Windows arm64 (or defer)
+
+- [ ] Run `hello.exe` and `trap.exe` on Windows arm64 (real, QEMU, or CI); trap must print “Caught: The Unwind Trap”
+- [x] Static checks done; runtime test deferred to Phase 4 if no Windows arm64 yet
+
+### 2.5 If Phase 2 fails (SEH)
+
+- **Crash in trap or wrong unwind in .s:** Focus on `compiler/aarch64/cgobj.pas` (e.g. `WriteUnwindInfo`), stack layout, and alignment. Compare FPC’s .s with clang-generated .s for a similar C try/except.
+- **Bug #66952** and recent “local unwind” MR (try/finally Exit/Break/Continue) are the same area; align fixes with trunk.
+
+---
+
+## Phase 3: Build native Windows arm64 compiler (bridge)
+
+- [ ] **Phase 3** (next)
+
+**Goal:** Use `ppcrossa64` (on WSL) to build the FPC compiler + RTL **for** aarch64-win64 and obtain the **Windows .exe** of the compiler (the one that will run on Windows arm64).
+
+### 3.1 Produce the native compiler binary
+
+- [ ] From FPC source root, build the compiler **for** aarch64-win64 using ppcrossa64 (output = Windows arm64 PE). EXENAME = **ppca64** (ppca64.exe on Windows).
+- **Option A – build only the compiler:** From `compiler/` or the top-level Makefile, run the compiler build with `FPC=path/to/ppcrossa64`, `OS_TARGET=win64`, `CPU_TARGET=aarch64`, and the same BINUTILSPREFIX/CROSSOPT. The resulting binary (e.g. `compiler/ppca64` when built on WSL) is a **Windows PE** even though it has no .exe suffix on Linux; copy it to Windows as `ppca64.exe`.
+- **Option B – install for target:** If the top-level `make install` with CROSSINSTALL=1 already produces a “target” compiler binary in the install tree, use that. Confirm where the aarch64-win64 compiler lands (e.g. `$(INSTALL_PREFIX)/bin/ppca64` or in a target-specific subdir).
+- **Intent:** The **output** is a compiler that is a **Windows arm64** PE (name ppca64 or ppca64.exe). That file is the “native” FPC for Windows arm64.
+
+### 3.2 Checkpoint
+
+- [ ] Windows .exe (ppca64 / ppca64.exe) exists in build or install tree
+- [ ] `objdump -p ppca64` → file format coff-arm64
+
+### 3.3 If Phase 3 fails
+
+- Link errors building compiler: same as Phase 1 (libs, CRT, CROSSOPT).
+- “Cycle” or bootstrap confusion: ensure we are only **building for** aarch64-win64, not trying to run the new compiler on WSL (it’s a Windows binary).
+
+---
+
+## Phase 4: Self-hosting (make cycle on Windows arm64)
+
+- [ ] **Phase 4**
+
+**Goal:** Run the native compiler (from Phase 3) on a **Windows arm64** machine and complete `make cycle` so the compiler compiles itself.
+
+### 4.1 Environment
+
+- [ ] **Where:** Real Windows arm64 hardware, or QEMU Windows 11 arm64 VM, or **GitHub Actions** Windows arm64 runner
+- [ ] **What to copy:** Native compiler .exe from Phase 3, aarch64-win64 RTL/units, FPC source (or minimal tree for cycle)
+
+### 4.2 Run cycle
+
+- [ ] On Windows arm64: `set FPC=C:\path\to\ppca64.exe` and `make cycle CPU_TARGET=aarch64 OS_TARGET=win64`
+- [ ] **Checkpoint:** Cycle completes without crash; new compiler binary produced by arm64 compiler
+
+### 4.3 If Phase 4 fails
+
+- **Crash during cycle (e.g. in middle of compile):** Very often **SEH/unwind** (same as Phase 2). Fix unwind/.pdata in `cgobj.pas` (and related), then re-do Phase 1–3 and retry cycle.
+- **Link or asm errors:** Same debugging as Phase 1/3 (toolchain, paths, BINUTILSPREFIX on Windows if using MinGW there).
+
+---
+
+## Phase 5: Lazarus
+
+- [ ] **Phase 5**
+
+**Goal:** Build **Lazarus** with the (fixed) aarch64-win64 toolchain.
+
+### 5.1 Build Lazarus
+
+- [ ] Use native Windows arm64 compiler (Phase 3 or 4) + RTL/units; follow Lazarus build docs for Windows arm64
+- [ ] **Checkpoint:** Lazarus builds; IDE starts on Windows arm64; can open and rebuild a project
+
+### 5.2 If Phase 5 fails
+
+- Missing units or packages: add/fix aarch64-win64 in Lazarus/FPC packages.
+- Crashes or runtime errors: back to SEH/RTL (Phase 2) and possibly debug info.
+
+---
+
+## Phase 6: Shell extensions and WinRE
+
+- [ ] **Phase 6**
+
+**Goal:** Satisfy bounty clause: “Shell extensions which would only load as pure arm64 in File Explorer’s explorer.exe” (and WinRE if required).
+
+### 6.1 Shell extension
+
+- [ ] Build small shell extension (DLL) with toolchain; ensure pure arm64 (objdump → coff-arm64)
+- [ ] On Windows arm64, register and load in Explorer; **checkpoint:** Explorer loads without crash
+
+### 6.2 WinRE
+
+- [ ] If required: build and test minimal app in Windows Recovery Environment; document result
+
+---
+
+## Phase 7: Upstream and bounty closure
+
+- [ ] **Phase 7**
+
+**Goal:** Get changes into FPC trunk and meet sponsor requirements.
+
+### 7.1 Patches and PR
+
+- [ ] Prepare patches (or branch) against **FPC trunk** (official GitLab)
+- [ ] Open **merge request** / **pull request**; describe fixes (SEH/unwind, RTL/win64)
+- [ ] Publish patches (mailing list or fork) for community testing
+
+### 7.2 Sponsor comment
+
+- [ ] In **every modified unit**, add sponsor comment: “This work was sponsored by [client]. See [website] and [GitHub fork URL].”
+- [ ] Do before or as part of the MR
+
+### 7.3 Acceptance
+
+- [ ] FPC developers merge; “changes accepted by compiler developers” and “in Free Pascal trunk”
+
+---
+
+## Order and dependency check (re-check)
+
+| Phase | Depends on | Rationale |
+|-------|------------|-----------|
+| 1 | – | Must have cross-compiler + RTL before any validation. |
+| 2 | 1 | Need working ppcrossa64 and units to compile hello/trap. |
+| 3 | 1 (and 2 recommended) | Need ppcrossa64 to produce the Windows .exe; SEH fix can come later but earlier is cheaper. |
+| 4 | 3 | Need the Windows .exe to run cycle on Windows arm64. |
+| 5 | 2 or 4 | Need a working compiler; self-hosting (4) is strongest proof, but Lazarus can be attempted after 2 if cycle is blocked. |
+| 6 | 2 (or 4) | Need working toolchain; can parallel with 5. |
+| 7 | 1–6 | All technical work and sponsor text before final MR. |
+
+**Risks re-checked:**
+
+- **SEH blocks 4 and 5:** Phase 2 explicitly validates SEH early so we don’t discover it only at cycle/Lazarus.
+- **Phase 3 exact make target:** If “installbase” doesn’t produce the Windows .exe in the right place, we need to find the correct target (e.g. “compiler” for aarch64-win64 only) and document it in this plan.
+- **No Windows arm64 hardware:** Phases 4, 5, 6 need Windows arm64; plan already mentions QEMU and GitHub Actions as alternatives.
+
+---
+
+## Immediate action list (where we are)
+
+1. [x] Confirm Phase 1 checkpoints (ppcrossa64 + units).
+2. [x] Run Phase 2.1–2.3 (hello, objdump, trap + .s inspection).
+3. [ ] If trap crashes on Windows arm64 or unwind looks wrong: open `compiler/aarch64/cgobj.pas`, compare with ARM64 PCS/SEH, plan SEH patch.
+4. [ ] **Next:** Run Phase 3 – document exact command that produces the Windows arm64 compiler .exe (ppca64).
+5. [ ] Set up Windows arm64 environment (real, QEMU, or GitHub Actions) for Phase 4.
+
+---
+
+## Re-check summary (plan validated)
+
+- **Order:** 1 → 2 → 3 → 4 → 5/6 → 7. No phase can be done without its predecessor (except 5/6 in parallel after 4 or 2).
+- **Bounty coverage:** All bounty items (pure arm64, Lazarus, toolchain, shell extensions, WinRE, trunk acceptance, PR, sponsor comment) are assigned to a phase.
+- **SEH risk:** Phase 2 explicitly validates SEH (trap + .s inspection) so we don’t discover unwind bugs only at cycle or Lazarus.
+- **Phase 3 clarity:** “Native” compiler = Windows arm64 PE produced by ppcrossa64; output name is ppca64 (ppca64.exe on Windows). Phase 3 may require building the compiler sub-tree for aarch64-win64 and taking that binary; exact make target is to be confirmed when Phase 1–2 are done.
+- **Hardware:** Phases 4–6 need Windows arm64; plan allows QEMU or GitHub Actions if no real hardware.
+- **Contingencies:** Each phase has an “If it fails” row or paragraph so we don’t block without a next action.
+
+---
+
+## Doc references
+
+- **Strategy / WSL / SEH:** `docs/gemini-conversation-summary.md`
+- **Plan and -ClvLLVM:** `docs/plan-win-aarch64.md`
+- **This file:** `docs/next-steps-detailed.md`

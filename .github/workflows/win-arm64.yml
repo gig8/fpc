@@ -1,0 +1,101 @@
+# Windows arm64 CI – cross-build on Linux, run hello.exe/trap.exe on Windows arm64.
+# See docs/ci-arm64-plan.md.
+
+name: Windows arm64
+
+on:
+  push:
+    branches: [ develop, feature/win-aarch64, main ]
+  pull_request:
+    branches: [ develop, feature/win-aarch64, main ]
+
+env:
+  FPC_VERSION: "3.3.1"
+  LLVM_MINGW_RELEASE: "20251216"
+  LLVM_MINGW_ARCHIVE: "llvm-mingw-20251216-ucrt-ubuntu-22.04-x86_64.tar.xz"
+
+jobs:
+  crossbuild:
+    name: Cross-build (Linux → aarch64-win64)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install host FPC
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y fpc
+          fpc -iV
+
+      - name: Install llvm-mingw
+        run: |
+          mkdir -p "$RUNNER_TEMP/llvm-mingw"
+          curl -sL "https://github.com/mstorsjo/llvm-mingw/releases/download/${{ env.LLVM_MINGW_RELEASE }}/${{ env.LLVM_MINGW_ARCHIVE }}" -o "$RUNNER_TEMP/llvm-mingw.tar.xz"
+          tar -xf "$RUNNER_TEMP/llvm-mingw.tar.xz" -C "$RUNNER_TEMP/llvm-mingw" --strip-components=1
+          echo "LLVM_MINGW=$RUNNER_TEMP/llvm-mingw" >> $GITHUB_ENV
+          echo "$RUNNER_TEMP/llvm-mingw/bin" >> $GITHUB_PATH
+          "$RUNNER_TEMP/llvm-mingw/bin/aarch64-w64-mingw32-clang" --version
+
+      - name: Cross-install FPC aarch64-win64
+        run: |
+          make crossinstall -j$(nproc) \
+            CPU_TARGET=aarch64 \
+            OS_TARGET=win64 \
+            FPC=/usr/bin/fpc \
+            BINUTILSPREFIX=aarch64-w64-mingw32- \
+            CROSSOPT="-FD$RUNNER_TEMP/llvm-mingw/bin" \
+            INSTALL_PREFIX="$RUNNER_TEMP/fpc_install"
+        env:
+          PATH: "$RUNNER_TEMP/llvm-mingw/bin:$PATH"
+
+      - name: Compile Phase 2 tests
+        run: |
+          PPC="$GITHUB_WORKSPACE/compiler/ppcrossa64"
+          UP="$RUNNER_TEMP/fpc_install/lib/fpc/${{ env.FPC_VERSION }}/units/aarch64-win64"
+          export PATH="$RUNNER_TEMP/llvm-mingw/bin:$PATH"
+          "$PPC" -Twin64 -XPaarch64-w64-mingw32- \
+            -Fu"$UP/rtl" -Fu"$UP/rtl-objpas" \
+            -FE"$GITHUB_WORKSPACE/docs/phase2-tests" \
+            -FD"$RUNNER_TEMP/llvm-mingw/bin" \
+            -o"$GITHUB_WORKSPACE/docs/phase2-tests/hello.exe" \
+            docs/phase2-tests/hello.pas
+          "$PPC" -Twin64 -XPaarch64-w64-mingw32- \
+            -Fu"$UP/rtl" -Fu"$UP/rtl-objpas" \
+            -FE"$GITHUB_WORKSPACE/docs/phase2-tests" \
+            -FD"$RUNNER_TEMP/llvm-mingw/bin" \
+            -o"$GITHUB_WORKSPACE/docs/phase2-tests/trap.exe" \
+            docs/phase2-tests/trap.pas
+
+      - name: Upload arm64 executables
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase2-arm64-exes
+          path: |
+            docs/phase2-tests/hello.exe
+            docs/phase2-tests/trap.exe
+
+  test-windows-arm64:
+    name: Run on Windows arm64
+    runs-on: windows-11-arm
+    needs: [ crossbuild ]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download arm64 executables
+        uses: actions/download-artifact@v4
+        with:
+          name: phase2-arm64-exes
+
+      - name: Run hello.exe and trap.exe
+        run: |
+          $dir = if (Test-Path hello.exe) { '.' } else { 'docs\phase2-tests' }
+          Push-Location $dir
+          .\hello.exe
+          $out = .\trap.exe 2>&1 | Out-String
+          Pop-Location
+          if ($out -notmatch 'Caught: The Unwind Trap') {
+            Write-Error "Expected 'Caught: The Unwind Trap'. Got: $out"
+            exit 1
+          }
+          Write-Host "OK: $out"
+        shell: pwsh
