@@ -4236,6 +4236,12 @@ implementation
                  got_addrn:=false;
                  p1:=caddrnode.create(p1);
                  p1.fileinfo:=filepos;
+                 { When taking address of a procedure, register the procsym so it
+                   is written to the .ppu (needed for compilerprocs like _fpc_local_unwind
+                   that backends look up via search_system_proc when compiling other units). }
+                 if (taddrnode(p1).left.nodetype=loadn) and
+                    (tloadnode(taddrnode(p1).left).symtableentry.typ=procsym) then
+                   tstoredsym(tloadnode(taddrnode(p1).left).symtableentry).register_sym;
                  if cs_typed_addresses in current_settings.localswitches then
                    include(taddrnode(p1).addrnodeflags,anf_typedaddr);
                  { Store the procvar that we are expecting, the
