@@ -124,4 +124,5 @@ jobs:
             exit 1
           }
           Write-Host "OK: $out"
+          exit 0
         shell: pwsh
