@@ -56,9 +56,7 @@ jobs:
           tar -xf "$RUNNER_TEMP/llvm-mingw.tar.xz" -C "$RUNNER_TEMP/llvm-mingw" --strip-components=1
           "$RUNNER_TEMP/llvm-mingw/bin/aarch64-w64-mingw32-clang" --version
 
-      # Cache key includes -v2: old caches were saved without compiler/ppca64 in path,
-      # so a "hit" restored no ppca64 and we skipped building it. Bump key to force miss
-      # until we have a green run that saves a complete cache (with ppca64).
+      # Cache key: bump -v3 to force a clean rebuild (avoids stale/partial caches).
       - name: Cache FPC cross-build (ppcrossa64 + aarch64-win64 units + ppca64)
         id: cache_fpc
         uses: actions/cache@v4
@@ -67,7 +65,7 @@ jobs:
             compiler/ppcrossa64
             compiler/ppca64
             ${{ runner.temp }}/fpc_install
-          key: fpc-aarch64-win64-${{ runner.os }}-${{ hashFiles('compiler/**', 'rtl/**', 'packages/**', 'Makefile', 'Makefile.fpc') }}-v2
+          key: fpc-aarch64-win64-${{ runner.os }}-${{ hashFiles('compiler/**', 'rtl/**', 'packages/**', 'Makefile', 'Makefile.fpc') }}-v3
 
       - name: Verify FPC cache contents (when cache hit)
         if: steps.cache_fpc.outputs.cache-hit == 'true'
@@ -77,7 +75,7 @@ jobs:
           [ -f "$GITHUB_WORKSPACE/compiler/ppca64" ] || missing="$missing compiler/ppca64"
           [ -d "$RUNNER_TEMP/fpc_install/lib/fpc/${{ env.FPC_VERSION }}/units/aarch64-win64" ] || missing="$missing fpc_install/.../units/aarch64-win64"
           if [ -n "$missing" ]; then
-            echo "::error::FPC cache incomplete (missing:$missing). Bump cache key suffix (-v2 -> -v3) in the workflow to force a fresh build."
+            echo "::error::FPC cache incomplete (missing:$missing). Bump cache key suffix (-v3 -> -v4) in the workflow to force a fresh build."
             exit 1
           fi
           echo "FPC cache OK: ppcrossa64, ppca64, fpc_install present."
@@ -96,11 +94,34 @@ jobs:
         env:
           PATH: "/usr/bin:/usr/local/bin:$RUNNER_TEMP/llvm-mingw/bin:$PATH"
 
+      # After crossinstall, ppcrossa64 lives in fpc_install/bin/; copy to compiler/ so Phase 2 compile finds it.
+      - name: Ensure ppcrossa64 at compiler/ for Phase 2 compile
+        if: steps.cache_fpc.outputs.cache-hit != 'true'
+        run: |
+          D="$GITHUB_WORKSPACE"
+          INST="$RUNNER_TEMP/fpc_install"
+          if [ -f "$INST/bin/ppcrossa64" ] && [ ! -f "$D/compiler/ppcrossa64" ]; then
+            cp "$INST/bin/ppcrossa64" "$D/compiler/ppcrossa64"
+            chmod +x "$D/compiler/ppcrossa64"
+            echo "Copied ppcrossa64 from fpc_install/bin to compiler/"
+          fi
+          for cand in "$D/compiler/ppcrossa64" "$INST/bin/ppcrossa64"; do
+            if [ -f "$cand" ]; then echo "ppcrossa64 at: $cand"; break; fi
+          done
+
       - name: Compile Phase 2 tests
         run: |
           set -e
-          PPC="$GITHUB_WORKSPACE/compiler/ppcrossa64"
+          D="$GITHUB_WORKSPACE"
           UP="$RUNNER_TEMP/fpc_install/lib/fpc/${{ env.FPC_VERSION }}/units/aarch64-win64"
+          if [ -f "$D/compiler/ppcrossa64" ]; then
+            PPC="$D/compiler/ppcrossa64"
+          elif [ -f "$RUNNER_TEMP/fpc_install/bin/ppcrossa64" ]; then
+            PPC="$RUNNER_TEMP/fpc_install/bin/ppcrossa64"
+          else
+            echo "::error::ppcrossa64 not found in compiler/ or fpc_install/bin/"
+            exit 1
+          fi
           export PATH="$RUNNER_TEMP/llvm-mingw/bin:$PATH"
           "$PPC" -Twin64 -XPaarch64-w64-mingw32- \
             -Fu"$UP/rtl" -Fu"$UP/rtl-objpas" \
