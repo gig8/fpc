@@ -92,6 +92,15 @@ jobs:
             -o"$GITHUB_WORKSPACE/docs/phase2-tests/trap.exe" \
             docs/phase2-tests/trap.pas
 
+      - name: Generate msgtxt.inc with host FPC (Phase 3)
+        run: |
+          # msg2inc must run on the runner (Linux); make compiler uses FPC=ppcrossa64
+          # which would build a Windows msg2inc.exe and then try to run it -> fail.
+          # Pre-generate msgtxt.inc with host fpc so "make compiler" skips msg2inc.
+          make -C compiler msgtxt.inc FPC=/usr/bin/fpc
+        env:
+          PATH: "/usr/bin:/usr/local/bin:$PATH"
+
       - name: Build native ppca64 (Phase 3)
         run: |
           make -C compiler compiler -j4 \
