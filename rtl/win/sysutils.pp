@@ -1932,7 +1932,13 @@ begin
   if assigned(entry) then
     result:=entry^.cls.CreateRes(entry^.msg)
   else
-    result:=EExternalException.CreateResFmt(@SExternalException,[rec.ExceptionCode]);
+    begin
+      {$ifdef FPC_DEBUG_EXIT_EXCEPTION}
+      if IsConsole then
+        writeln(stderr,'[FPC_DEBUG_EXIT_EXCEPTION] EExternalException: code=$',hexstr(cardinal(rec.ExceptionCode),8),' addr=$',hexstr(PtrUInt(rec.ExceptionAddress),16));
+      {$endif FPC_DEBUG_EXIT_EXCEPTION}
+      result:=EExternalException.CreateResFmt(@SExternalException,[rec.ExceptionCode]);
+    end;
 
   if result is EExternal then
     EExternal(result).FExceptionRecord:=rec;

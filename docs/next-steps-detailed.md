@@ -169,9 +169,15 @@ On Windows arm64, **ppca64.exe -iV** can print the version (e.g. 3.3.1) and then
 
 **Related to our Bounty Boss fix?** Maybe, but not directly. Our fix only made **try...finally + exit** run the finally block by calling _fpc_local_unwind → RtlUnwindEx during **normal execution**. The ppca64 crash is in the **process exit path** (after the version is printed): finalization, stack teardown, or ExitProcess. So it’s a different code path. They **share** the same SEH/RTL (rtl/win64/seh64.inc, sysutils WinExceptionObject): if Windows delivers an exception during exit unwind with a code the RTL doesn’t map (e.g. an ARM64-specific or exit-unwind code), we get EExternalException. That could be a pre-existing aarch64-win64 gap (missing exception code in the map) or a bug in exit-unwind handling—not something we introduced with _fpc_local_unwind. To tell: run a ppca64 built **without** our SEH changes (if you have one) and see if the exit crash still happens; or capture the exception code in a debugger and check whether it’s something we should add to the RTL’s exception map.
 
-### Follow-up: why the FPC cache can be incomplete
+### Follow-up: why the FPC cache can be incomplete (and what we did)
 
-The FPC cache is saved at job end **even when the job fails**. If a run failed after crossinstall but before or during "Build native ppca64", the saved cache has ppcrossa64 and fpc_install but no compiler/ppca64. A later run with the same key then restores that incomplete cache. **Workaround:** Bump the cache key suffix in the workflow (e.g. -v6 → -v7) to force a full rebuild. **After CI is stable:** Consider why the cache doesn't work as intended—e.g. only save the FPC cache on job success (conditional save), or split the Linux job so the cache is written only after Phase 3 completes, to avoid incomplete caches.
+**Before:** The combined `actions/cache` step saves at job end **even when the job fails**. So a run that failed after crossinstall but before "Build native ppca64" saved ppcrossa64 + fpc_install but no compiler/ppca64; the next run restored that incomplete cache. **Fix we use:** We switched to **restore-only** (`actions/cache/restore`) plus a **save step** with `if: success()` (`actions/cache/save`). So we only persist cache when the crossbuild job succeeds; we never save incomplete cache.
+
+### Three brains: cache (questioning each other)
+
+- **Brain 1 (pessimist):** "Bumping the key every time we get incomplete cache is a band-aid; the next failure will corrupt again." **Answer:** We now save only on success, so we don’t persist incomplete cache. Bump -vN only when you change cache paths or inputs.
+- **Brain 2 (architect):** "Should we split into two caches (crossinstall vs ppca64) so a failure during Build ppca64 doesn’t overwrite the crossinstall cache?" **Answer:** With save-on-success, a failed job doesn’t save at all, so we don’t overwrite a good cache with partial state. One cache is enough; the critical fix was conditional save.
+- **Brain 3 (pragmatist):** "What if the job succeeds but ppca64 is missing (e.g. make put it somewhere we don’t copy)?" **Answer:** The "Verify FPC cache contents" step runs on cache hit and fails if ppca64 is missing; the "Stage and upload" step fails if ppca64 isn’t found. So we don’t save a "success" run without ppca64.
 
 ### Optional: CI artifact for assembly
 

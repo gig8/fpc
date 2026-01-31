@@ -2219,6 +2219,12 @@ implementation
             inherited g_local_unwind(list, l);
             exit;
           end;
+        { -dFPC_NO_WIN64_LOCAL_UNWIND: emit plain jump (old behaviour) for A/B testing. }
+        if defined_macro('FPC_NO_WIN64_LOCAL_UNWIND') then
+          begin
+            inherited g_local_unwind(list, l);
+            exit;
+          end;
         { Call RTL _FPC_local_unwind(frame, target) so the OS runs finally blocks
           during unwind (RtlUnwindEx). Without this, try...finally + exit would
           just JMP to finally and never run the unwinder → wrong behaviour. }

@@ -19,5 +19,7 @@ end;
 
 begin
   TestException;
+  Flush(Output);
   writeln('Done.');
+  Flush(Output);
 end.
