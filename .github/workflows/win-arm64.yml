@@ -163,13 +163,21 @@ jobs:
       - name: Build native ppca64 (Phase 3)
         if: steps.cache_fpc.outputs.cache-hit != 'true'
         run: |
+          D="$GITHUB_WORKSPACE"
           UP="$RUNNER_TEMP/fpc_install/lib/fpc/${{ env.FPC_VERSION }}/units/aarch64-win64"
           make -C compiler compiler -j4 \
-            FPC="$GITHUB_WORKSPACE/compiler/ppcrossa64" \
+            FPC="$D/compiler/ppcrossa64" \
             OS_TARGET=win64 \
             CPU_TARGET=aarch64 \
             BINUTILSPREFIX=aarch64-w64-mingw32- \
             OPT="-FD$RUNNER_TEMP/llvm-mingw/bin -Fu$UP/rtl -Fu$UP/rtl-objpas"
+          # Ensure canonical location for cache and staging (make may put it in compiler/ or aarch64/bin/...)
+          for cand in "$D/compiler/ppca64" "$D/compiler/aarch64/bin/aarch64-win64/ppca64" "$D/ppca64"; do
+            if [ -f "$cand" ]; then
+              if [ "$cand" != "$D/compiler/ppca64" ]; then cp "$cand" "$D/compiler/ppca64"; fi
+              break
+            fi
+          done
         env:
           PATH: "/usr/bin:/usr/local/bin:$RUNNER_TEMP/llvm-mingw/bin:$PATH"
 
@@ -212,14 +220,17 @@ jobs:
           else
             echo "neontest.exe not built (neontest.pas optional), skipping"
           fi
-          # ppca64: make puts it in compiler/ or compiler/aarch64/bin/aarch64-win64/
+          # ppca64: make can put it in compiler/, compiler/aarch64/bin/aarch64-win64/, or repo root
           PPC64=""
-          for cand in "$D/compiler/ppca64" "$D/compiler/aarch64/bin/aarch64-win64/ppca64"; do
+          for cand in "$D/compiler/ppca64" "$D/compiler/ppca64.exe" \
+                      "$D/compiler/aarch64/bin/aarch64-win64/ppca64" \
+                      "$D/compiler/aarch64/bin/aarch64-win64/ppca64.exe" \
+                      "$D/ppca64" "$D/ppca64.exe"; do
             if [ -f "$cand" ]; then PPC64="$cand"; break; fi
           done
           if [ -z "$PPC64" ]; then
-            echo "Missing: ppca64 (checked compiler/ppca64 and compiler/aarch64/bin/aarch64-win64/ppca64)"
-            find "$D/compiler" -maxdepth 4 -name 'ppca64*' 2>/dev/null || true
+            echo "Missing: ppca64 (searched compiler/, aarch64/bin/aarch64-win64/, repo root)"
+            find "$D" -maxdepth 5 -name 'ppca64*' 2>/dev/null || true
             exit 1
           fi
           cp "$PPC64" "$STAGE/ppca64"
