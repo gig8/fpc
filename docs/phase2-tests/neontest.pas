@@ -4,6 +4,7 @@
   If this passes on Arm64, the backend supports production HPC-style code. }
 program neontest;
 {$mode objfpc}
+uses SysUtils;
 
 type
   TVector4 = array[0..3] of Single;
