@@ -103,12 +103,13 @@ jobs:
 
       - name: Build native ppca64 (Phase 3)
         run: |
+          UP="$RUNNER_TEMP/fpc_install/lib/fpc/${{ env.FPC_VERSION }}/units/aarch64-win64"
           make -C compiler compiler -j4 \
             FPC="$GITHUB_WORKSPACE/compiler/ppcrossa64" \
             OS_TARGET=win64 \
             CPU_TARGET=aarch64 \
             BINUTILSPREFIX=aarch64-w64-mingw32- \
-            OPT="-FD$RUNNER_TEMP/llvm-mingw/bin"
+            OPT="-FD$RUNNER_TEMP/llvm-mingw/bin -Fu$UP/rtl -Fu$UP/rtl-objpas"
         env:
           PATH: "/usr/bin:/usr/local/bin:$RUNNER_TEMP/llvm-mingw/bin:$PATH"
 
