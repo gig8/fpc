@@ -8,6 +8,7 @@ on:
     branches: [ develop, feature/win-aarch64, main ]
   pull_request:
     branches: [ develop, feature/win-aarch64, main ]
+  workflow_dispatch:  # Run manually from Actions tab → "Windows arm64" → "Run workflow"
 
 env:
   FPC_VERSION: "3.3.1"
