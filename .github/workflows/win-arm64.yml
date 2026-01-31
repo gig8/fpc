@@ -120,6 +120,12 @@ jobs:
             -FD"$RUNNER_TEMP/llvm-mingw/bin" \
             -o"$GITHUB_WORKSPACE/docs/phase2-tests/arm64trap.exe" \
             docs/phase2-tests/arm64trap.pas
+          "$PPC" -Twin64 -XPaarch64-w64-mingw32- \
+            -Fu"$UP/rtl" -Fu"$UP/rtl-objpas" \
+            -FE"$GITHUB_WORKSPACE/docs/phase2-tests" \
+            -FD"$RUNNER_TEMP/llvm-mingw/bin" \
+            -o"$GITHUB_WORKSPACE/docs/phase2-tests/neontest.exe" \
+            docs/phase2-tests/neontest.pas
 
       - name: Cache msgtxt.inc / msgidx.inc (host-generated, skip rebuild when msg files unchanged)
         id: cache_msgtxt
@@ -137,8 +143,11 @@ jobs:
           echo "cache_msgtxt=${{ steps.cache_msgtxt.outputs.cache-hit }}"
           echo "Cache hits above = skip download/build for those steps."
 
+      # When building ppca64 (FPC cache miss), we must have msgtxt.inc. Relying on
+      # msgtxt cache restore can still lead to make trying to build/run msg2inc.exe.
+      # So always generate with host FPC whenever we will run "Build native ppca64".
       - name: Generate msgtxt.inc with host FPC (Phase 3)
-        if: steps.cache_msgtxt.outputs.cache-hit != 'true'
+        if: steps.cache_fpc.outputs.cache-hit != 'true'
         run: |
           # msg2inc must run on the runner (Linux); make compiler uses FPC=ppcrossa64
           # which would build a Windows msg2inc.exe and then try to run it -> fail.
@@ -160,7 +169,7 @@ jobs:
         env:
           PATH: "/usr/bin:/usr/local/bin:$RUNNER_TEMP/llvm-mingw/bin:$PATH"
 
-      # Paths: compile writes to $GITHUB_WORKSPACE/docs/phase2-tests/{hello,trap,arm64trap}.exe;
+      # Paths: compile writes to $GITHUB_WORKSPACE/docs/phase2-tests/{hello,trap,arm64trap,neontest}.exe;
       # ppca64 is at $GITHUB_WORKSPACE/compiler/ppca64 (or compiler/aarch64/bin/aarch64-win64/).
       # We stage into arm64-exes/ and upload that dir; download extracts to workspace.
       - name: List expected exe locations (diagnostic)
@@ -189,6 +198,15 @@ jobs:
             cp "$D/docs/phase2-tests/arm64trap" "$STAGE/arm64trap.exe"
           else
             echo "Missing: arm64trap (expected docs/phase2-tests/arm64trap.exe or arm64trap)"
+            ls -la "$D/docs/phase2-tests/"
+            exit 1
+          fi
+          if [ -f "$D/docs/phase2-tests/neontest.exe" ]; then
+            cp "$D/docs/phase2-tests/neontest.exe" "$STAGE/"
+          elif [ -f "$D/docs/phase2-tests/neontest" ]; then
+            cp "$D/docs/phase2-tests/neontest" "$STAGE/neontest.exe"
+          else
+            echo "Missing: neontest (expected docs/phase2-tests/neontest.exe or neontest)"
             ls -la "$D/docs/phase2-tests/"
             exit 1
           fi
@@ -259,6 +277,22 @@ jobs:
             exit 1
           }
           Write-Host "Bounty Boss test passed."
+          exit 0
+        shell: pwsh
+
+      - name: Run NEON vector test (SIMD performance validation)
+        run: |
+          Set-Location $env:GITHUB_WORKSPACE
+          $dir = if (Test-Path arm64-exes\neontest.exe) { 'arm64-exes' } else { '.' }
+          Push-Location $dir
+          $out = .\neontest.exe 2>&1 | Out-String
+          Pop-Location
+          Write-Host $out
+          if ($out -notmatch 'Result: PASS \(SIMD alignment and execution successful\)') {
+            Write-Error "NEON test failed: expected 'Result: PASS (SIMD alignment and execution successful)'. Got: $out"
+            exit 1
+          }
+          Write-Host "NEON vector test passed."
           exit 0
         shell: pwsh
 
