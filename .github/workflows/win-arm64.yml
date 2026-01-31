@@ -151,11 +151,14 @@ jobs:
 
       - name: Verify ppca64 (Phase 3 native compiler)
         run: |
-          $ppc = if (Test-Path compiler\ppca64) { 'compiler\ppca64' } else { 'ppca64' }
-          $ver = & $ppc -iV 2>&1 | Out-String
+          Write-Host 'Artifact layout:'; Get-ChildItem compiler -ErrorAction SilentlyContinue; Get-ChildItem docs\phase2-tests -ErrorAction SilentlyContinue
+          $ppc = if (Test-Path compiler\ppca64) { '.\compiler\ppca64' } elseif (Test-Path ppca64) { '.\ppca64' } else { $null }
+          if (-not $ppc) { Write-Error 'ppca64 not found'; exit 1 }
+          $ver = & $ppc -iV 2>&1
+          $exitCode = $LASTEXITCODE
           Write-Host "ppca64 -iV: $ver"
-          if (-not $ver -or $LASTEXITCODE -ne 0) {
-            Write-Error "ppca64 -iV failed: $ver"
+          if ($exitCode -ne 0 -or -not $ver) {
+            Write-Error "ppca64 -iV failed (exit $exitCode): $ver"
             exit 1
           }
           exit 0
