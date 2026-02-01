@@ -53,6 +53,7 @@ Fix a **crash on ARM64 Windows** when `exit` (or break/continue) is used inside 
 - **Handler:** on unwind, clear UNWOUND_TO_CALL and DEBUG_REGISTERS, OR in CONTEXT_FULL_USER_ARM64, write to `dispatch.ContextRecord^.ContextFlags`, and copy `context.Lr` and `context.Fp` into `dispatch.ContextRecord^`.
 - **Debug:** `FPC_DEBUG_WIN64_UNWIND` logs steps 0–7 in _fpc_local_unwind and "UNWIND: patch context" / "after patch" in handler. arm64trap test has VEH printing ExceptionCode and ExceptionAddress.
 - **CI:** builds FPC, runs arm64trap (and others). Latest run at link above; logs show whether handler ran and what Lr/Fp/ContextFlags were.
+- **CI trigger branch:** `win-aarch64-gpt52` (baseline for new experiments).
 
 ---
 
