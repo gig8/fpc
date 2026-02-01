@@ -349,6 +349,19 @@ jobs:
             echo "::endgroup::"
           done
 
+      # Extract target address passed to _FPC_local_unwind (compare with runtime target= from CI output).
+      - name: Extract unwind target from disasm (Bounty Boss)
+        run: |
+          D="$GITHUB_WORKSPACE/tests/phase2-tests"
+          STAGE="$GITHUB_WORKSPACE/arm64-exes"
+          disasm="$STAGE/arm64trap_disasm.txt"
+          if [ -f "$disasm" ]; then
+            echo "::group::Unwind target (arm64trap)"
+            python3 "$D/extract_unwind_target.py" --disasm "$disasm" 2>&1 || true
+            echo "Compare 'resolved target' above with runtime 'target=\$...' from FPC_DEBUG_WIN64_UNWIND."
+            echo "::endgroup::"
+          fi
+
       - name: List expected exe locations (diagnostic)
         run: |
           D="$GITHUB_WORKSPACE"
