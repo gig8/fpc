@@ -455,13 +455,15 @@ var
     - EstablisherFrame = _fpc_local_unwind's Caller-SP = TestException's SP
       at the point where it called _fpc_local_unwind
 
-    We pass this EstablisherFrame as TargetFrame, and ctx (with PC set to
-    target) as ContextRecord. This matches longjmp's approach. }
+    We pass the caller SP as TargetFrame (compiler provides it as "frame").
+    EstablisherFrame from RtlVirtualUnwind should match that; if they diverge,
+    using the compiler frame avoids relying on possibly-wrong unwind metadata. }
   UnwindHistory: UNWIND_HISTORY_TABLE;
   RuntimeFunction: PRUNTIME_FUNCTION;
   HandlerData: Pointer;
   EstablisherFrame: QWord;
   ImageBase: QWord;
+  TargetSp: QWord;
   FrameToUse: Pointer;
 {$endif CPUAARCH64}
 begin
@@ -507,12 +509,20 @@ begin
     ctx.Pc := ctx.Lr;
     EstablisherFrame := ctx.Sp;
   end;
-  FrameToUse := Pointer(EstablisherFrame);
+  if frame<>nil then
+    TargetSp := PtrUInt(frame)
+  else
+    TargetSp := EstablisherFrame;
+  FrameToUse := Pointer(TargetSp);
   {$ifdef FPC_DEBUG_WIN64_UNWIND}
   if IsConsole then
   begin
     writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND] step 3: after unwind ctx.Pc=$',hexstr(ctx.Pc,16),
-      ' Sp=$',hexstr(ctx.Sp,16),' EstablisherFrame=$',hexstr(EstablisherFrame,16),' Lr=$',hexstr(ctx.Lr,16));
+      ' Sp=$',hexstr(ctx.Sp,16),' EstablisherFrame=$',hexstr(EstablisherFrame,16),
+      ' frame=$',hexstr(PtrUInt(frame),16),' TargetSp=$',hexstr(TargetSp,16),' Lr=$',hexstr(ctx.Lr,16));
+    if (frame<>nil) and (PtrUInt(frame)<>EstablisherFrame) then
+      writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND]   WARNING: frame != EstablisherFrame (delta=$',
+        hexstr(PtrUInt(frame)-EstablisherFrame,16),')');
     Flush(stderr);
   end;
   {$endif FPC_DEBUG_WIN64_UNWIND}
@@ -528,7 +538,7 @@ begin
     Flush(stderr);
   end;
   {$endif FPC_DEBUG_WIN64_UNWIND}
-  ctx.Sp := EstablisherFrame;  { Ensure SP matches the frame we're restoring to }
+  ctx.Sp := TargetSp;  { Ensure SP matches the frame we're restoring to }
   {$ifdef FPC_DEBUG_WIN64_UNWIND}
   if IsConsole then
   begin
