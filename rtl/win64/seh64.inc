@@ -779,6 +779,14 @@ begin
   else
   begin
     TargetRva:=dispatch.TargetIp-dispatch.ImageBase;
+    {$ifdef FPC_DEBUG_WIN64_UNWIND}
+    if IsConsole then
+    begin
+      writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND] UNWIND branch ExceptionFlags=$',hexstr(rec.ExceptionFlags,8),
+        ' TargetUnwind=',hexstr(rec.ExceptionFlags and EXCEPTION_TARGET_UNWIND,8));
+      Flush(stderr);
+    end;
+    {$endif FPC_DEBUG_WIN64_UNWIND}
     { When EXCEPTION_TARGET_UNWIND is set, we are the handler for the target frame.
       Patch context so RtlRestoreContext restores LR and callee-saved regs on ARM64.
       Do this first: the landing pad is often *after* the try-finally scope (RvaEnd

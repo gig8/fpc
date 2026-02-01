@@ -72,9 +72,63 @@ So we pass a **pre-unwound** context (TestException’s frame, PC = landing pad)
 
 **Conclusion**: RtlUnwindEx overwrites our context at entry; the context passed to RtlRestoreContext is the OS-built one and likely did not have CONTEXT_INTEGER set, so LR (and possibly FP/X19–X28) were not restored. The first instruction at the landing pad then faults (e.g. load/store using bad FP or stack).
 
-**Fix**: In `__FPC_specific_handler`, when we are the target frame (EXCEPTION_TARGET_UNWIND) and about to return, **patch** the context that RtlUnwindEx will pass to RtlRestoreContext: set `ContextFlags` to include CONTEXT_ARM64, CONTEXT_CONTROL_ARM64, CONTEXT_INTEGER_ARM64 (and clear UNWOUND_TO_CALL and DEBUG). That way RtlRestoreContext restores LR and callee-saved integer regs. Implemented in seh64.inc at the "Exit" when TargetRva in scope and EXCEPTION_TARGET_UNWIND.
+**Fix**: In `__FPC_specific_handler`, when we are the target frame (EXCEPTION_TARGET_UNWIND), **patch** the context at the **start** of the unwind branch (landing pad is after the try-finally scope, so "TargetRva in scope" was always false). Set `ContextFlags` to include CONTEXT_ARM64, CONTEXT_CONTROL_ARM64, CONTEXT_INTEGER_ARM64 so RtlRestoreContext restores PC, SP, LR, FP, X19–X28.
 
-## 10. References
+## 10. Assembly analysis (arm64trap_disasm.txt)
+
+**TestException prolog** (P$ARM64TRAP_$$_TESTEXCEPTION): `stp x29,x30,[sp,#-0x10]!`; `mov x29,sp`; `str x19,[sp,#-0x10]!`; `sub sp,sp,#0x10`. So SP -= 48, FP = SP after first two (points at saved x29,x30).
+
+**Call to _fpc_local_unwind**: `mov x0,sp` (frame = current SP), then `adrp`/`add` for target, then `bl _fpc_local_unwind`. So first arg = TestException’s SP at call; second = landing-pad address.
+
+**Landing pad** (first instruction after try-finally): **NOP**, then `bl fpc_get_output`, then **`str x0,[sp]`** then `ldr x1,[sp]` … So the first memory access after the NOP is **`str x0,[sp]`**. If SP is not restored by RtlRestoreContext (e.g. OS didn’t set CONTEXT_CONTROL/INTEGER), that STR faults → ACCESS_VIOLATION at or near the landing pad. So the fault is consistent with **SP (and/or FP) not restored**; the handler patch (CONTEXT_CONTROL + CONTEXT_INTEGER at EXCEPTION_TARGET_UNWIND) is intended to fix that.
+
+**Epilogue** (after landing-pad block): `add sp,sp,#0x10`; `ldr x19,[sp],#0x10`; `mov sp,x29`; `ldp x29,x30,[sp],#0x10`; `ret`. So the epilogue restores SP from x29 (FP); FP and LR must be correct for the epilogue and ret to work.
+
+## 11. If it still fails: what to check, and could it be a Windows ARM64 bug?
+
+### What to inspect on the ARM64 machine
+
+1. **Handler logs**  
+   With `FPC_DEBUG_WIN64_UNWIND`, we now log when we hit EXCEPTION_TARGET_UNWIND: ContextFlags, Lr, Sp, Fp before/after patch. If we **never** see "TARGET_UNWIND: before patch", we're still not in the right path (e.g. handler not called for target frame, or different build). If we **do** see it:
+   - **Lr or Fp is 0 (or clearly wrong)** → the OS-built context didn't fill integer/control state; our flag patch alone won't fix it (we'd need to supply correct values, which we don't have in the handler).
+   - **Lr/Sp/Fp look plausible** but we still fault → either the OS overwrites the context after we return, or RtlRestoreContext ignores our flags on this path.
+
+2. **Faulting instruction**  
+   VEH gives `ExceptionAddress`. Disassemble that instruction in the built exe (e.g. `llvm-objdump -d` or dump bytes and decode). That tells you:
+   - Which **register** is used (SP, FP, x19, etc.) and whether it's a load or store.
+   - If it's `str x0,[sp]` and we fault → SP is bad (unmapped or misaligned).
+   - If it's something like `ldr x0,[x29,#offset]` → FP is bad.
+   So you can tie the fault directly to a missing or wrong register in the restored context.
+
+3. **Unwind metadata (.pdata/.xdata)**  
+   If the **unwind info** for TestException or _fpc_local_unwind is wrong, RtlVirtualUnwind (inside RtlUnwindEx) could produce a wrong EstablisherFrame or wrong context (SP/FP/LR). On the ARM64 machine, dump unwind for the relevant functions, e.g.:
+   - `llvm-objdump -u arm64trap.exe` (or the system unit / exe that contains the call).
+   Check that the prolog/epilog described in .xdata matches the actual instructions (saved regs, frame size, EstablisherFrame = Caller-SP).
+
+4. **Debugger at the landing pad**  
+   Set a **breakpoint at the landing-pad address** (the `target` we pass to _fpc_local_unwind). Run until the breakpoint (after the unwind). When you hit it, inspect **SP, FP (x29), LR (x30), x19** in the debugger. If any are wrong (e.g. SP not 16-byte aligned, or FP/LR zero), that’s the register RtlRestoreContext didn’t restore correctly.
+
+5. **Compare with another runtime**  
+   On the same ARM64 Windows machine, run a **minimal C** program that does `setjmp` / `longjmp` (or a minimal C++ try/finally-style unwind). If that works, the OS path is capable of restoring context; if it also fails in a similar way, that supports an OS/ABI quirk or bug.
+
+### Could it be a bug in Windows ARM64?
+
+**Yes, it’s plausible.**
+
+- **Go** already documents a **Windows 10 ARM64 quirk**: “_CONTEXT_CONTROL should include PC, SP, and LR, but empirically LR doesn’t come along unless you also set _CONTEXT_INTEGER.” So the OS doesn’t quite match the documented behavior; we’re working around that by patching flags. If the OS **ignores** our patched context (e.g. RtlUnwindEx copies from an internal buffer to the context *after* calling our handler), our patch would have no effect and it would look like “Windows doesn’t restore LR/INTEGER in this path.”
+- **RtlUnwindEx** might, on ARM64, **overwrite the context again** after the language handler returns (e.g. set PC/SP from internal state but never copy our ContextRecord back). We can’t see that from our code; we’d only infer it if we patch, see good values in the handler, and still fault.
+- **RtlRestoreContext** might have a code path (e.g. when called from RtlUnwindEx) that **only restores a subset** of the context (e.g. PC + SP) and ignores CONTEXT_INTEGER on ARM64. That would be a Windows bug.
+- **RtlVirtualUnwind** might, in some builds, **not fill** LR/FP in the context structure on ARM64. Then even with CONTEXT_INTEGER set, the values we restore would be garbage.
+
+**How to gather evidence**
+
+- **Same binary on Windows 11 ARM64** (if available): if it works there but not on Windows 10 ARM64, that points at an OS version–specific bug or quirk.
+- **Search** for “RtlRestoreContext ARM64”, “CONTEXT_INTEGER ARM64”, “RtlUnwindEx ARM64” in Windows Feedback Hub, MSDN forums, or GitHub (e.g. dotnet/runtime, golang/go) to see if others hit similar behavior.
+- **Report** to Microsoft (Feedback Hub or support) with: minimal repro (try/finally + exit), VEH ExceptionAddress/ExceptionCode, and the observation that CONTEXT_CONTROL+INTEGER patch in the target-frame handler doesn’t restore LR/FP. Include the Go runtime comment as precedent for CONTEXT behavior on Windows 10 ARM64.
+
+So: if it still doesn’t work, the next steps are (1) use the handler logs and faulting instruction to see *which* register is wrong, (2) check unwind metadata and a debugger at the landing pad to confirm what state we’re actually in, and (3) treat a Windows ARM64 bug as a real possibility and look for OS version differences and existing reports.
+
+## 12. References
 
 - MSDN: RtlUnwindEx, RtlRestoreContext, RtlVirtualUnwind, CONTEXT (ARM64).
 - MSDN: ARM64 exception handling (prolog/epilog, EstablisherFrame = Caller-SP).
