@@ -1,14 +1,11 @@
 # Windows arm64 CI – cross-build on Linux, run hello.exe/trap.exe on Windows arm64.
-# Caches: llvm-mingw (release), FPC cross-build + ppca64 (source hash), msgtxt.inc (msg hash). See Vault Projects/fpc/ci-arm64-plan.md.
+# Caches: llvm-mingw (release), msgtxt.inc (msg hash). FPC cross-build cache is disabled so the
+# compiler and RTL are always built from source (no stale compiler/rtl from cache).
 #
 # Cache invalidation: if you change something that affects a build output, update that cache's key.
 # - llvm-mingw: key = LLVM_MINGW_RELEASE (+ runner). Change env.LLVM_MINGW_RELEASE to force re-download.
-# - FPC cross-build: key = hash(...)-vN. Bump -vN to force a fresh build when cache is incomplete (see below).
 # - msgtxt: key = hash(compiler/msg/error*.msg). Add any msg file that feeds msg2inc.
 #
-# FPC cache: we use actions/cache/restore (restore only) and actions/cache/save with if: success()
-# (save only when job succeeds). So we never persist incomplete cache; no more "bump key when incomplete".
-# Bump -vN when you change something that affects build output (e.g. add a cache path).
 # Output for Windows: we stage the native compiler as ppca64.exe in the artifact so the Windows job
 # runs ppca64.exe -iV (reliable output/exit code); make produces "ppca64" (no extension), we copy to STAGE/ppca64.exe.
 
@@ -62,33 +59,10 @@ jobs:
           tar -xf "$RUNNER_TEMP/llvm-mingw.tar.xz" -C "$RUNNER_TEMP/llvm-mingw" --strip-components=1
           "$RUNNER_TEMP/llvm-mingw/bin/aarch64-w64-mingw32-clang" --version
 
-      # Restore only; save step at end of job with if: success() so we never save incomplete cache.
-      - name: Restore FPC cross-build cache (ppcrossa64 + aarch64-win64 units + ppca64)
-        id: cache_fpc
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            compiler/ppcrossa64
-            compiler/ppca64
-            ${{ runner.temp }}/fpc_install
-          key: fpc-aarch64-win64-${{ runner.os }}-${{ hashFiles('compiler/**', 'rtl/**', 'packages/**', 'Makefile', 'Makefile.fpc') }}-v10
-
-      - name: Verify FPC cache contents (when cache hit)
-        if: steps.cache_fpc.outputs.cache-hit == 'true'
-        run: |
-          missing=""
-          [ -f "$GITHUB_WORKSPACE/compiler/ppcrossa64" ] || missing="$missing compiler/ppcrossa64"
-          [ -f "$GITHUB_WORKSPACE/compiler/ppca64" ] || missing="$missing compiler/ppca64"
-          [ -d "$RUNNER_TEMP/fpc_install/lib/fpc/${{ env.FPC_VERSION }}/units/aarch64-win64" ] || missing="$missing fpc_install/.../units/aarch64-win64"
-          if [ -n "$missing" ]; then
-            echo "::error::FPC cache incomplete (missing:$missing). Bump cache key suffix (-v8 -> -v9) in the workflow to force a fresh build."
-            exit 1
-          fi
-          echo "FPC cache OK: ppcrossa64, ppca64, fpc_install present."
+      # FPC cross-build cache disabled: always build compiler and RTL from source.
 
       - name: Cross-install FPC aarch64-win64
         id: crossinstall
-        if: steps.cache_fpc.outputs.cache-hit != 'true'
         run: |
           which make || true
           make crossinstall -j4 \
@@ -104,14 +78,14 @@ jobs:
           PATH: "/usr/bin:/usr/local/bin:$RUNNER_TEMP/llvm-mingw/bin:$PATH"
 
       - name: Show crossinstall log on failure
-        if: failure() && steps.cache_fpc.outputs.cache-hit != 'true'
+        if: failure()
         run: |
           echo "::group::Last 120 lines of crossinstall log"
           tail -120 "$RUNNER_TEMP/crossinstall.log" || true
           echo "::endgroup::"
 
       - name: Upload crossinstall log on failure
-        if: failure() && steps.cache_fpc.outputs.cache-hit != 'true'
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: crossinstall-log
@@ -120,9 +94,8 @@ jobs:
           if-no-files-found: ignore
 
       # FPC install puts cross-compiler in INSTALL_BINDIR/$(SOURCESUFFIX), e.g. fpc_install/bin/x86_64-linux/ppcrossa64.
-      # Find it anywhere under fpc_install and copy to compiler/ so Phase 2 compile and cache find it.
+      # Find it anywhere under fpc_install and copy to compiler/ for Phase 2 compile.
       - name: Ensure ppcrossa64 at compiler/ for Phase 2 compile
-        if: steps.cache_fpc.outputs.cache-hit != 'true'
         run: |
           D="$GITHUB_WORKSPACE"
           INST="$RUNNER_TEMP/fpc_install"
@@ -142,9 +115,8 @@ jobs:
           [ -n "$FOUND" ] && echo "ppcrossa64 at: $FOUND"
 
       # If sysutils.pp(659) fails with "Unknown compilerproc _fpc_local_unwind", system.ppu
-      # did not export the symbol. This step checks whether system.ppu contains it (when cache missed).
+      # did not export the symbol. This step checks whether system.ppu contains it.
       - name: Diagnose system.ppu for _fpc_local_unwind (sysutils.pp:659)
-        if: steps.cache_fpc.outputs.cache-hit != 'true'
         run: |
           INST="$RUNNER_TEMP/fpc_install"
           UP="$INST/lib/fpc/${{ env.FPC_VERSION }}/units/aarch64-win64"
@@ -232,18 +204,14 @@ jobs:
             compiler/msgidx.inc
           key: msgtxt-${{ runner.os }}-${{ hashFiles('compiler/msg/error*.msg') }}
 
-      - name: Report cache status (llvm-mingw, FPC cross-build, msgtxt)
+      - name: Report cache status (llvm-mingw, msgtxt; FPC always built from source)
         run: |
           echo "cache_llvm=${{ steps.cache_llvm.outputs.cache-hit }}"
-          echo "cache_fpc=${{ steps.cache_fpc.outputs.cache-hit }}"
+          echo "cache_fpc=disabled (always build from source)"
           echo "cache_msgtxt=${{ steps.cache_msgtxt.outputs.cache-hit }}"
-          echo "Cache hits above = skip download/build for those steps."
 
-      # When building ppca64 (FPC cache miss), we must have msgtxt.inc. Relying on
-      # msgtxt cache restore can still lead to make trying to build/run msg2inc.exe.
-      # So always generate with host FPC whenever we will run "Build native ppca64".
+      # Generate msgtxt.inc with host FPC so "Build native ppca64" can run (make would otherwise try to run msg2inc.exe).
       - name: Generate msgtxt.inc with host FPC (Phase 3)
-        if: steps.cache_fpc.outputs.cache-hit != 'true'
         run: |
           # msg2inc must run on the runner (Linux); make compiler uses FPC=ppcrossa64
           # which would build a Windows msg2inc.exe and then try to run it -> fail.
@@ -253,7 +221,6 @@ jobs:
           PATH: "/usr/bin:/usr/local/bin:$PATH"
 
       - name: Build native ppca64 (Phase 3)
-        if: steps.cache_fpc.outputs.cache-hit != 'true'
         run: |
           D="$GITHUB_WORKSPACE"
           UP="$RUNNER_TEMP/fpc_install/lib/fpc/${{ env.FPC_VERSION }}/units/aarch64-win64"
@@ -442,6 +409,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Log Windows version and env for ARM64 unwind diagnostics (bounty Boss).
+      - name: Log Windows ARM64 environment (OS version, diagnostics)
+        run: |
+          Write-Host "=== Windows ARM64 runner ==="
+          Write-Host "Runner: $env:RUNNER_NAME"
+          Write-Host "OS: $([System.Environment]::OSVersion.VersionString)"
+          try {
+            $os = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction SilentlyContinue
+            if ($os) {
+              Write-Host "Caption: $($os.Caption)"
+              Write-Host "Version: $($os.Version)"
+              Write-Host "Build: $($os.BuildNumber)"
+            }
+          } catch { Write-Host "Get-CimInstance OS: $_" }
+          Write-Host "PowerShell: $($PSVersionTable.PSVersion)"
+          Write-Host "=== End Windows env ==="
+        shell: pwsh
+
       # Artifact "phase2-arm64-exes": download extracts to workspace/phase2-arm64-exes/ (artifact name).
       # Upload came from Linux dir arm64-exes/, so contents may be at phase2-arm64-exes/ or phase2-arm64-exes/arm64-exes/.
       - name: Download arm64 executables
@@ -544,6 +529,8 @@ jobs:
           $out = .\arm64trap.exe 2>&1 | Out-String
           Pop-Location
           Write-Host $out
+          # Save for later steps (VEH address, UNWIND diagnostics)
+          $out | Set-Content -Path "$env:GITHUB_WORKSPACE/arm64trap_output.txt" -Encoding utf8
           $ok = $false
           if ($out -match 'Success: Finally block executed!') {
             if ($out -notmatch 'Done\.') {
@@ -556,6 +543,21 @@ jobs:
             Write-Host "Bounty Boss (fix) failed: expected 'Success: Finally block executed!'. Got: $out"
           }
           echo "bounty_boss_ok=$ok" >> $env:GITHUB_OUTPUT
+          # Report unwind diagnostics: did we hit TARGET_UNWIND patch? UNWIND branch? VEH fault address?
+          if ($out -match '\[FPC_DEBUG_WIN64_UNWIND\] TARGET_UNWIND: before patch') {
+            Write-Host "::notice::TARGET_UNWIND patch was hit (context patch applied)"
+          } else {
+            Write-Host "::warning::TARGET_UNWIND patch was NOT hit (no 'TARGET_UNWIND: before patch' in output)"
+          }
+          if ($out -match '\[FPC_DEBUG_WIN64_UNWIND\] UNWIND branch ExceptionFlags=') {
+            Write-Host "::notice::UNWIND branch was entered (handler called during unwind)"
+            $out -split "`n" | Where-Object { $_ -match 'UNWIND branch ExceptionFlags=' } | ForEach-Object { Write-Host $_ }
+          } else {
+            Write-Host "::warning::UNWIND branch was NOT seen (handler may not be called for target frame with EXCEPTION_UNWIND)"
+          }
+          if ($out -match '\[VEH\] ExceptionCode=\$([0-9A-Fa-f]+) ExceptionAddress=\$([0-9A-Fa-f]+)') {
+            Write-Host "::notice::VEH fault: ExceptionCode (first) = $($Matches[1]), ExceptionAddress = $($Matches[2])"
+          }
           exit 0
         shell: pwsh
 
@@ -576,6 +578,16 @@ jobs:
 
       # ppca64 (Phase 3 native compiler) – skipped for now: gets stuck when run on Windows ARM64.
       # We will come back to this; build/stage still happens in crossbuild job for future use.
+
+      # On failure, upload arm64trap output for offline inspection (VEH address, UNWIND lines).
+      - name: Upload arm64trap output on failure (diagnostics)
+        if: failure() && steps.bounty_boss.outputs.bounty_boss_ok != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: arm64trap-output
+          path: ${{ github.workspace }}/arm64trap_output.txt
+          retention-days: 7
+          if-no-files-found: ignore
 
       # Fail the job only if Bounty Boss (fix) failed. Fix must show finally + Done. No-fix is informational only.
       - name: Fail if Bounty Boss (fix) failed
