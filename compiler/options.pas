@@ -4833,9 +4833,9 @@ procedure read_arguments(cmd:TCmdStr);
       {$endif loongarch64}
 
       { Cross-compilation support: define CPU macros based on TARGET architecture.
-        The {$ifdef} blocks above define macros based on HOST architecture. When
+        The ifdef blocks above define macros based on HOST architecture. When
         cross-compiling, we must also define the target CPU macros so RTL code
-        using {$ifdef CPUAARCH64} etc. compiles correctly.
+        using ifdef CPUAARCH64 etc. compiles correctly.
         We use systems.cpu_* to avoid conflicts with cpuinfo.tcputype values. }
       if target_info.cpu=systems.cpu_i386 then
         begin
