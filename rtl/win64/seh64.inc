@@ -466,6 +466,9 @@ begin
 {$ifdef CPUAARCH64}
   FillChar(UnwindHistory, sizeof(UnwindHistory), 0);
   UnwindHistory.Unwind := 1;
+  { RtlCaptureContext on ARM64 Windows does not fill LR (step 1 shows Lr=0). RtlVirtualUnwind
+    below fills ctx.Lr; RtlUnwindEx overwrites our context at entry, so the handler must
+    reinforce Lr/Fp and ContextFlags so RtlRestoreContext restores them. }
   RtlCaptureContext(ctx);
   {$ifdef FPC_DEBUG_WIN64_UNWIND}
   if IsConsole then
@@ -809,12 +812,17 @@ begin
       {$endif FPC_DEBUG_WIN64_UNWIND}
       { Do NOT overwrite Pc/Sp: when we are called with EXCEPTION_UNWINDING, dispatch.TargetIp
         and dispatch.EstablisherFrame refer to the frame being unwound (e.g. finally), not the
-        RtlUnwindEx target. Overwriting would corrupt the context. Only patch ContextFlags
-        so RtlRestoreContext restores LR/FP (CONTEXT_INTEGER). }
+        RtlUnwindEx target. Overwriting would corrupt the context.
+        RtlCaptureContext on ARM64 Windows does not fill LR (step 1 shows Lr=0); RtlUnwindEx
+        overwrites our context at entry, so the OS may use a context with Lr=0 for the final
+        restore. Reinforce Lr and Fp from the context the OS gave us (valid from its unwind)
+        so RtlRestoreContext has the right values when CONTEXT_INTEGER is set. }
       context.ContextFlags := context.ContextFlags and not CONTEXT_UNWOUND_TO_CALL;
       context.ContextFlags := context.ContextFlags and not CONTEXT_DEBUG_REGISTERS_ARM64;
       context.ContextFlags := context.ContextFlags or CONTEXT_ARM64 or CONTEXT_CONTROL_ARM64 or CONTEXT_INTEGER_ARM64 or CONTEXT_FLOATING_POINT_ARM64;
       dispatch.ContextRecord^.ContextFlags := context.ContextFlags;
+      dispatch.ContextRecord^.Lr := context.Lr;
+      dispatch.ContextRecord^.Fp := context.Fp;
       {$ifdef FPC_DEBUG_WIN64_UNWIND}
       if IsConsole then
       begin
