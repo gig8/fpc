@@ -3,7 +3,12 @@
   from inside the try block, the runtime must run the finally block before
   exiting (local unwind). On Windows arm64, incorrect .pdata/unwind info
   causes hang or crash. If this runs and prints "Success: Finally block executed!"
-  the compiler has generated correct unwind for this case. }
+  the compiler has generated correct unwind for this case.
+
+  Debug flow (FPC_DEBUG_WIN64_UNWIND): step 0..7 in _fpc_local_unwind; step 8
+  only if RtlUnwindEx returned (it shouldn't). Last step seen = where we were
+  before crash. In program: "LANDED at first instr" = we reached target;
+  "Back in main" = we returned from TestException; "Done." = full success. }
 program arm64trap;
 {$mode objfpc}
 
@@ -28,18 +33,30 @@ begin
     exit;
   finally
     writeln('Success: Finally block executed!');
+    Flush(Output);
+    Flush(stderr);
     DumpFrames('3. In finally block');
   end;
-  writeln('DEBUG: After finally block in TestException');  { if missing, crash at RtlUnwindEx transfer or first instr after try }
+  { First line after try-finally: if we never see this, crash is in RtlUnwindEx or at target. }
+  writeln('DEBUG: LANDED at first instr after try-finally');
+  Flush(Output);
+  Flush(stderr);
+  writeln('DEBUG: After finally block in TestException');
+  Flush(Output);
   DumpFrames('4. After finally, before return');
+  writeln('DEBUG: TestException epilogue (about to ret to main)');
+  Flush(Output);
+  Flush(stderr);
 end;
 
 begin
   TestException;
-  writeln('DEBUG: Back in main (after TestException)');  { if missing, crash on return from TestException }
-  DumpFrames('5. Back in main');
+  writeln('DEBUG: Back in main (after TestException)');
   Flush(Output);
-  writeln('DEBUG: After Flush(Output)');                  { if missing, crash in Flush }
+  Flush(stderr);
+  DumpFrames('5. Back in main');
+  writeln('DEBUG: After Flush(Output)');
+  Flush(Output);
   DumpFrames('6. After Flush');
   writeln('Done.');
   Flush(Output);
