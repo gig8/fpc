@@ -410,12 +410,52 @@ end;
 procedure _fpc_local_unwind(frame,target: Pointer);[public,alias:'_FPC_local_unwind'];compilerproc;
 var
   ctx: TContext;
+{$ifdef CPUAARCH64}
+  { On ARM64 Windows, EstablisherFrame = Caller-SP (SP just before the call).
+    The compiler passes SP; the unwinder expects Caller-SP. Obtain it via
+    RtlVirtualUnwind. See .NET runtime exceptionhandling.cpp, LLVM libunwind. }
+  UnwindHistory: UNWIND_HISTORY_TABLE;
+  RuntimeFunction: PRUNTIME_FUNCTION;
+  HandlerData: Pointer;
+  EstablisherFrame: QWord;
+  ImageBase: QWord;
+  FrameToUse: Pointer;
+  i: Longint;
+{$endif CPUAARCH64}
 begin
   {$ifdef FPC_DEBUG_WIN64_UNWIND}
   if IsConsole then
     writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND] _fpc_local_unwind ENTER frame=$',hexstr(PtrUInt(frame),16),' target=$',hexstr(PtrUInt(target),16));
   {$endif FPC_DEBUG_WIN64_UNWIND}
-  RtlUnwindEx(frame,target,nil,nil,@ctx,nil);
+{$ifdef CPUAARCH64}
+  FrameToUse := frame;
+  FillChar(UnwindHistory, sizeof(UnwindHistory), 0);
+  UnwindHistory.Unwind := 1;
+  RtlCaptureContext(ctx);
+  { Unwind twice: from _fpc_local_unwind to caller (the frame with try/finally),
+    then from that frame to get its EstablisherFrame. }
+  for i := 1 to 2 do
+  begin
+    RuntimeFunction := RtlLookupFunctionEntry(ContextGetIP(ctx), ImageBase, @UnwindHistory);
+    if Assigned(RuntimeFunction) then
+      RtlVirtualUnwind(UNW_FLAG_NHANDLER, ImageBase, ContextGetIP(ctx),
+        RuntimeFunction, ctx, @HandlerData, @EstablisherFrame, nil)
+    else
+    begin
+      { Leaf function: return address is in LR. }
+      ctx.Pc := ctx.Lr;
+      ctx.ContextFlags := ctx.ContextFlags or CONTEXT_UNWOUND_TO_CALL;
+    end;
+  end;
+  FrameToUse := Pointer(EstablisherFrame);
+  {$ifdef FPC_DEBUG_WIN64_UNWIND}
+  if IsConsole then
+    writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND] ARM64: using EstablisherFrame=$',hexstr(EstablisherFrame,16),' (Caller-SP)');
+  {$endif FPC_DEBUG_WIN64_UNWIND}
+  RtlUnwindEx(FrameToUse, target, nil, nil, @ctx, @UnwindHistory);
+{$else}
+  RtlUnwindEx(frame, target, nil, nil, @ctx, nil);
+{$endif CPUAARCH64}
   {$ifdef FPC_DEBUG_WIN64_UNWIND}
   if IsConsole then
     writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND] _fpc_local_unwind EXIT (returned from RtlUnwindEx)');
