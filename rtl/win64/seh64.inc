@@ -528,23 +528,21 @@ begin
 
   { Use the unwound context (TestException's frame state). It has correct LR
     (return address), FP, X19-X28. Only override PC to the target (landing pad
-    after try block). Zeroing LR/FP/X19 would crash on ret or callee-saved use. }
+    after try block). Zeroing LR/FP/X19 would crash on ret or callee-saved use.
+    
+    EXPERIMENT: Do NOT overwrite SP. Keep the unwound context's Sp as-is.
+    Hypothesis: EstablisherFrame (Caller-SP) is wrong for landing pad.
+    The unwound ctx.Sp might be closer to what the landing pad expects. }
   ContextSetIP(ctx, PtrUInt(target));
   {$ifdef FPC_DEBUG_WIN64_UNWIND}
   if IsConsole then
   begin
     writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND] step 4: after ContextSetIP ctx.Pc=$',hexstr(ctx.Pc,16));
+    writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND] step 5: KEEPING original ctx.Sp=$',hexstr(ctx.Sp,16),' (NOT setting to EstablisherFrame=$',hexstr(EstablisherFrame,16),')');
     Flush(stderr);
   end;
   {$endif FPC_DEBUG_WIN64_UNWIND}
-  ctx.Sp := EstablisherFrame;  { Ensure SP matches the frame we're restoring to }
-  {$ifdef FPC_DEBUG_WIN64_UNWIND}
-  if IsConsole then
-  begin
-    writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND] step 5: after set Sp ctx.Sp=$',hexstr(ctx.Sp,16));
-    Flush(stderr);
-  end;
-  {$endif FPC_DEBUG_WIN64_UNWIND}
+  { REMOVED: ctx.Sp := EstablisherFrame; - keeping unwound ctx.Sp }
   { RtlRestoreContext restores only the portions indicated by ContextFlags. Go runtime:
     LR and callee-saved regs are not restored unless CONTEXT_INTEGER is set. Ensure
     full user context (CONTROL + INTEGER + FLOATING_POINT + ARM64) so PC, SP, LR, Fp,
