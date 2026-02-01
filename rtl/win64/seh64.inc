@@ -795,6 +795,15 @@ begin
         if (TargetRva>=scope^.RvaStart) and (TargetRva<scope^.RvaEnd) and
           ((rec.ExceptionFlags and EXCEPTION_TARGET_UNWIND)<>0) then
         begin
+          { ARM64: RtlUnwindEx overwrites our _fpc_local_unwind context at entry; the
+            context that gets RtlRestoreContext'd is the one the OS built. On Windows 10
+            LR and callee-saved regs are not restored unless CONTEXT_INTEGER is set (Go
+            runtime). Force flags so RtlRestoreContext restores PC, SP, LR, FP, X19-X28. }
+{$ifdef CPUAARCH64}
+          context.ContextFlags := context.ContextFlags and not CONTEXT_UNWOUND_TO_CALL;
+          context.ContextFlags := context.ContextFlags and not CONTEXT_DEBUG_REGISTERS_ARM64;
+          context.ContextFlags := context.ContextFlags or CONTEXT_ARM64 or CONTEXT_CONTROL_ARM64 or CONTEXT_INTEGER_ARM64;
+{$endif CPUAARCH64}
           Exit;
         end;
 
