@@ -466,9 +466,10 @@ begin
 {$ifdef CPUAARCH64}
   FillChar(UnwindHistory, sizeof(UnwindHistory), 0);
   UnwindHistory.Unwind := 1;
-  { RtlCaptureContext on ARM64 Windows does not fill LR (step 1 shows Lr=0). RtlVirtualUnwind
-    below fills ctx.Lr; RtlUnwindEx overwrites our context at entry, so the handler must
-    reinforce Lr/Fp and ContextFlags so RtlRestoreContext restores them. }
+  { Go runtime (defs_windows_arm64.go): "LR doesn't come along on Windows 10 unless you also set
+    CONTEXT_INTEGER." Set ContextFlags BEFORE RtlCaptureContext so the OS fills CONTROL+INTEGER
+    (PC, SP, LR, X0-X30). Without this, RtlCaptureContext may only fill CONTROL and Lr stays 0. }
+  ctx.ContextFlags := CONTEXT_ARM64 or CONTEXT_CONTROL_ARM64 or CONTEXT_INTEGER_ARM64 or CONTEXT_FLOATING_POINT_ARM64;
   RtlCaptureContext(ctx);
   {$ifdef FPC_DEBUG_WIN64_UNWIND}
   if IsConsole then

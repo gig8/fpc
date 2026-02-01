@@ -135,3 +135,24 @@ So: if it still doesn’t work, the next steps are (1) use the handler logs and 
 - Nynaeve: “Programming against the x64 exception handling support, part 4” (RtlUnwindEx overwrites context, then unwinds; at target, sets Rip, Rax, RtlRestoreContext).
 - Go: `src/runtime/defs_windows_arm64.go` (CONTEXT_CONTROL + CONTEXT_INTEGER for LR on Windows 10 ARM64).
 - Stack Overflow: RtlRestoreContext and STATUS_UNWIND_CONSOLIDATE; longjmp landing wrong on 64-bit Windows.
+
+## 13. Lr=0 after RtlCaptureContext – investigation
+
+### Observation
+
+Step 1 in _fpc_local_unwind shows **Lr=$0000000000000000** after `RtlCaptureContext(ctx)`. Step 3 (after RtlVirtualUnwind) shows a valid Lr. So RtlCaptureContext on ARM64 Windows does not fill LR by default.
+
+### Comparison with other runtimes
+
+- **Go** (`defs_windows_arm64.go`): “_CONTEXT_CONTROL (0x400001) should include PC, SP, and LR. However, empirically, **LR doesn’t come along on Windows 10 unless you also set _CONTEXT_INTEGER (0x400002)**.” They set `_CONTEXT_CONTROL = 0x400003` (CONTROL | INTEGER) **before** capturing context so that LR is populated when they capture/use context for stack walking.
+- **GetThreadContext / SetThreadContext (MSDN)**: The caller **must set ContextFlags before the call** to indicate which portions of the context to retrieve or set. The OS fills only the portions requested. If ContextFlags is not set (or only CONTROL), the OS may not fill INTEGER (X0–X30 including LR).
+- **RtlCaptureContext**: The MSDN page does not explicitly say the caller must set ContextFlags before the call, but the same pattern likely applies: on ARM64 Windows, if ContextFlags is not set to include CONTEXT_INTEGER, the implementation may only fill CONTROL (PC, SP, Cpsr) and leave LR (and other integer regs) unfilled or zero.
+
+### Fix: set ContextFlags before RtlCaptureContext
+
+In _fpc_local_unwind, **set ctx.ContextFlags before calling RtlCaptureContext** so the OS knows to fill CONTROL + INTEGER (and optionally FLOATING_POINT):
+
+- `ctx.ContextFlags := CONTEXT_ARM64 or CONTEXT_CONTROL_ARM64 or CONTEXT_INTEGER_ARM64 or CONTEXT_FLOATING_POINT_ARM64;`
+- then `RtlCaptureContext(ctx);`.
+
+This matches Go’s approach (CONTROL | INTEGER before capture) and the GetThreadContext contract (ContextFlags as input). If the OS respects it for RtlCaptureContext, step 1 should then show a non-zero Lr. The context we pass to RtlUnwindEx would still be overwritten at entry (Nynaeve), but the handler patch (ContextFlags + Lr/Fp reinforcement) remains necessary for the final restore.
