@@ -256,12 +256,15 @@ function RtlVirtualUnwind(
   ContextPointers: PKNONVOLATILE_CONTEXT_POINTERS): EXCEPTION_ROUTINE;
   external 'kernel32.dll' name 'RtlVirtualUnwind';
 
+{ Official API: https://learn.microsoft.com/en-us/windows/win32/api/winnt/nf-winnt-rtlunwindex
+  NTSYSAPI VOID RtlUnwindEx(TargetFrame, TargetIp, ExceptionRecord, ReturnValue, ContextRecord, HistoryTable);
+  DLL: Kernel32.dll. Our parameter names match the docs; ContextRecord is scratch during unwind. }
 procedure RtlUnwindEx(
-  TargetFrame: Pointer;
-  TargetIp: Pointer;
+  TargetFrame: Pointer;       { [in, optional] PVOID TargetFrame }
+  TargetIp: Pointer;         { [in, optional] PVOID TargetIp }
   ExceptionRecord: PExceptionRecord;
-  ReturnValue: Pointer;
-  OriginalContext: PContext;  { scratch space, initial contents ignored }
+  ReturnValue: Pointer;       { [in] PVOID -> integer return register at TargetIp }
+  OriginalContext: PContext;  { [in] PCONTEXT ContextRecord – stores context during unwind }
   HistoryTable: PUNWIND_HISTORY_TABLE);
   external 'kernel32.dll' name 'RtlUnwindEx';
 

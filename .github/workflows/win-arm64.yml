@@ -528,10 +528,12 @@ jobs:
           Write-Host $out
           $ok = $false
           if ($out -match 'Success: Finally block executed!') {
-            if ($out -notmatch 'Done\.') { Write-Host "Warning: 'Done.' not in output (exit-path crash or buffering); finally block did run. Check for 'Back in main.' to narrow (if present, crash is in Flush/writeln; if absent, in return from TestException)." }
-            if ($out -match 'Back in main\.') { Write-Host "Back in main: return from TestException OK; crash is in Flush(Output) or writeln('Done.')." }
-            Write-Host "Bounty Boss (fix): passed (finally block executed)."
-            $ok = $true
+            if ($out -notmatch 'Done\.') {
+              Write-Host "Warning: 'Done.' not in output (exit-path crash). Check DEBUG lines: if 'DEBUG: Back in main' missing, crash on return from TestException; if 'DEBUG: After Flush' missing, crash in Flush."
+            } else {
+              Write-Host "Bounty Boss (fix): passed (finally + Done.)."
+              $ok = $true
+            }
           } else {
             Write-Host "Bounty Boss (fix) failed: expected 'Success: Finally block executed!'. Got: $out"
           }
@@ -539,41 +541,32 @@ jobs:
           exit 0
         shell: pwsh
 
-      - name: Run Bounty Boss test – no fix (arm64trap_no_fix.exe)
+      - name: Run Bounty Boss test – no fix (arm64trap_no_fix.exe) [informational]
         id: bounty_boss_no_fix
         run: |
           Set-Location $env:GITHUB_WORKSPACE
           $root = if (Test-Path phase2-arm64-exes) { 'phase2-arm64-exes' } elseif (Test-Path arm64-exes) { 'arm64-exes' } else { '.' }
           $dir = if (Test-Path (Join-Path $root 'arm64trap_no_fix.exe')) { $root } else { (Join-Path $root 'arm64-exes') }
           Push-Location $dir
-          Write-Host "=== arm64trap_no_fix.exe (no fix) ==="
+          Write-Host "=== arm64trap_no_fix.exe (no fix) [expected: no finally, prints Done] ==="
           $out = .\arm64trap_no_fix.exe 2>&1 | Out-String
           Pop-Location
           Write-Host $out
-          $ok = $false
-          if ($out -match 'Success: Finally block executed!') {
-            if ($out -notmatch 'Done\.') { Write-Host "Warning: 'Done.' not in output." }
-            Write-Host "Bounty Boss (no-fix): passed (finally block executed)."
-            $ok = $true
-          } else {
-            Write-Host "Bounty Boss (no-fix) failed: expected 'Success: Finally block executed!'. Got: $out"
-          }
-          echo "bounty_boss_no_fix_ok=$ok" >> $env:GITHUB_OUTPUT
+          if ($out -match 'Success: Finally block executed!') { Write-Host "Bounty Boss (no-fix): unexpectedly ran finally." } else { Write-Host "Bounty Boss (no-fix): as expected, did not run finally (skips to Done)." }
           exit 0
         shell: pwsh
 
       # ppca64 (Phase 3 native compiler) – skipped for now: gets stuck when run on Windows ARM64.
       # We will come back to this; build/stage still happens in crossbuild job for future use.
 
-      # Fail the job only if Bounty Boss (fix) or Bounty Boss (no-fix) failed.
-      - name: Fail if Bounty Boss failed
+      # Fail the job only if Bounty Boss (fix) failed. Fix must show finally + Done. No-fix is informational only.
+      - name: Fail if Bounty Boss (fix) failed
         run: |
           $boss = "${{ steps.bounty_boss.outputs.bounty_boss_ok }}"
-          $bossNoFix = "${{ steps.bounty_boss_no_fix.outputs.bounty_boss_no_fix_ok }}"
-          Write-Host "Bounty Boss (fix) ok: $boss; Bounty Boss (no-fix) ok: $bossNoFix"
-          if ($boss -ne 'true' -or $bossNoFix -ne 'true') {
-            Write-Error "One or more Bounty Boss checks failed (fix: $boss, no-fix: $bossNoFix). See logs above."
+          Write-Host "Bounty Boss (fix) ok: $boss"
+          if ($boss -ne 'true') {
+            Write-Error "Bounty Boss (fix) failed: expected 'Success: Finally block executed!' and 'Done.' in output. See logs above and DEBUG lines to narrow crash."
             exit 1
           }
-          Write-Host "All Bounty Boss checks passed."
+          Write-Host "Bounty Boss (fix) passed."
         shell: pwsh

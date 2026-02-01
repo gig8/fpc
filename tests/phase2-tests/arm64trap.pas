@@ -19,8 +19,9 @@ end;
 
 begin
   TestException;
-  writeln('Back in main.');   { narrow exit-path crash: if we see this, return from TestException worked }
+  writeln('DEBUG: Back in main (after TestException)');  { if missing, crash on return from TestException }
   Flush(Output);
+  writeln('DEBUG: After Flush(Output)');                  { if missing, crash in Flush }
   writeln('Done.');
   Flush(Output);
 end.
