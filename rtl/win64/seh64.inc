@@ -553,17 +553,20 @@ begin
 
   FillChar(UnwindHistory, sizeof(UnwindHistory), 0);
   UnwindHistory.Unwind := 1;
+  { Use compiler-provided frame (same as x86_64) rather than EstablisherFrame.
+    The compiler passes the try-block's frame pointer; EstablisherFrame from
+    RtlVirtualUnwind is the Caller-SP of _fpc_local_unwind, which is wrong. }
   {$ifdef FPC_DEBUG_WIN64_UNWIND}
   if IsConsole then
   begin
-    writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND] step 7: about to call RtlUnwindEx FrameToUse=$',hexstr(PtrUInt(FrameToUse),16),' target=$',hexstr(PtrUInt(target),16));
+    writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND] step 7: about to call RtlUnwindEx frame=$',hexstr(PtrUInt(frame),16),' target=$',hexstr(PtrUInt(target),16));
     writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND]   ctx: Pc=$',hexstr(ctx.Pc,16),' Sp=$',hexstr(ctx.Sp,16),
       ' Fp=$',hexstr(ctx.Fp,16),' Lr=$',hexstr(ctx.Lr,16));
     writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND]   ctx: X19=$',hexstr(ctx.X19,16),' Cpsr=$',hexstr(ctx.Cpsr,8));
     Flush(stderr);  { critical: flush before we never return }
   end;
   {$endif FPC_DEBUG_WIN64_UNWIND}
-  RtlUnwindEx(FrameToUse, target, nil, nil, @ctx, @UnwindHistory);
+  RtlUnwindEx(frame, target, nil, nil, @ctx, @UnwindHistory);
 {$else}
   RtlUnwindEx(frame, target, nil, nil, @ctx, nil);
 {$endif CPUAARCH64}
