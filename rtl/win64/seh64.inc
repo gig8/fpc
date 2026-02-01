@@ -482,9 +482,13 @@ begin
   UnwindHistory.Unwind := 1;
   {$ifdef FPC_DEBUG_WIN64_UNWIND}
   if IsConsole then
+  begin
     writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND] ARM64: calling RtlUnwindEx(FrameToUse=$',hexstr(PtrUInt(FrameToUse),16),
-      ', target=$',hexstr(PtrUInt(target),16),') ctx: Pc=$',hexstr(ctx.Pc,16),' Sp=$',hexstr(ctx.Sp,16),
+      ', target=$',hexstr(PtrUInt(target),16),')');
+    writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND]   ctx: Pc=$',hexstr(ctx.Pc,16),' Sp=$',hexstr(ctx.Sp,16),
       ' Fp=$',hexstr(ctx.Fp,16),' Lr=$',hexstr(ctx.Lr,16));
+    writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND]   ctx: X19=$',hexstr(ctx.X[19],16),' CtxFlags=$',hexstr(ctx.ContextFlags,8));
+  end;
   {$endif FPC_DEBUG_WIN64_UNWIND}
   RtlUnwindEx(FrameToUse, target, nil, nil, @ctx, @UnwindHistory);
 {$else}
