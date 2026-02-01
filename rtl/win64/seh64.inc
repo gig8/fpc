@@ -480,6 +480,10 @@ begin
 
   { Set continuation PC in the saved context (TestException's frame). }
   ContextSetIP(CtxSaved, PtrUInt(target));
+  { Use a fresh UnwindHistory for RtlUnwindEx; ours was populated by
+    RtlVirtualUnwind and could confuse the OS unwinder. }
+  FillChar(UnwindHistory, sizeof(UnwindHistory), 0);
+  UnwindHistory.Unwind := 1;
   RtlUnwindEx(FrameToUse, target, nil, nil, @CtxSaved, @UnwindHistory);
 {$else}
   RtlUnwindEx(frame, target, nil, nil, @ctx, nil);
