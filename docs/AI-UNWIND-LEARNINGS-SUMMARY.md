@@ -71,7 +71,22 @@ Commits on top of feature/win-aarch64:
 
 ---
 
-## 5. Related docs
+## 5. Integration status and next plan
+
+**Integrated into feature/win-aarch64 (2026-02-01):**
+
+- **opus45 options.pas fix:** Cherry-picked `ebee79394d` (target CPU macros for cross-compilation) and `0e080caab8` (nested comment fix). CI glob for `feature/win-aarch64*` was already on this branch. The RTL is now built with CPUAARCH64 (and other target macros) defined when cross-compiling to aarch64-win64.
+
+**Next plan (in order):**
+
+1. **Run CI** on feature/win-aarch64 to confirm the options.pas change: build still succeeds and arm64trap still runs (even if it still crashes at landing pad). This confirms ARM64 code path is present and exercised.
+2. **If crash persists:** Run the **bypass experiment** (step 2 in §4): in `_fpc_local_unwind`, after setting up `ctx`, call `RtlRestoreContext(@ctx, nil)` instead of `RtlUnwindEx`. If we land correctly → bug is inside RtlUnwindEx. If we still fault → bug is in our context/EstablisherFrame setup.
+3. **If bypass still faults:** Inspect **landing pad vs caller** (opus45 finding: landing pad address ~3MB from caller PC is suspicious). Consider .pdata/.xdata for TestException and _fpc_local_unwind (`llvm-objdump -u arm64trap.exe`), and whether we can pass or compute **Local-SP** for the landing-pad frame.
+4. **Optional low-risk test:** Try **FP as TargetFrame** (step 3 in §4) in a short-lived branch; opus45 already tried this and got INVALID_UNWIND_TARGET, so only if we have new evidence it might help.
+
+---
+
+## 6. Related docs
 
 - **In repo:** docs/AI-HELP-ARM64-UNWIND.md (context for AIs), docs/ARM64-WIN-UNWIND-RESEARCH.md (full research).
 - **Vault (Dropbox/personal/Vault/Projects/fpc):** AI-RESPONSES-ARM64-UNWIND-REF.md (full AI and branch proposal catalog), AI-UNWIND-LEARNINGS-SUMMARY.md (Vault copy of this doc).
