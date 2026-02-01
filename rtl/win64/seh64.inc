@@ -19,6 +19,15 @@ const
                               EXCEPTION_TARGET_UNWIND or EXCEPTION_COLLIDED_UNWIND;
 
   CONTEXT_UNWOUND_TO_CALL   = $20000000;
+  { ARM64: CONTEXT_CONTROL (0x400001) = PC, SP, LR, Cpsr; CONTEXT_INTEGER (0x400002) = X0-X30.
+    Go runtime (defs_windows_arm64.go): "LR doesn't come along on Windows 10 unless you also set
+    CONTEXT_INTEGER". So we must set both for RtlRestoreContext to restore LR and callee-saved regs. }
+{$ifdef CPUAARCH64}
+  CONTEXT_CONTROL_ARM64    = $400001;  { PC, SP, LR, Cpsr }
+  CONTEXT_INTEGER_ARM64    = $400002;  { X0-X30 inc. Fp=X29, Lr=X30 }
+  CONTEXT_ARM64            = $00400000;
+  CONTEXT_DEBUG_REGISTERS_ARM64 = $00100000;  { Clear before RtlUnwindEx; avoid name clash with wininc }
+{$endif CPUAARCH64}
 
   UNWIND_HISTORY_TABLE_SIZE = 12;
 
@@ -471,18 +480,17 @@ begin
       ' ctx.Sp=$',hexstr(ctx.Sp,16),' EstablisherFrame=$',hexstr(EstablisherFrame,16));
   {$endif FPC_DEBUG_WIN64_UNWIND}
 
-  { CRITICAL: For RtlUnwindEx, we need a FRESH context for the target frame,
-    not the unwound context. RtlUnwindEx will unwind TO this frame and then
-    restore the context. We should pass a minimal context with just the target PC. }
-  FillChar(ctx, sizeof(ctx), 0);
-  ctx.ContextFlags := CONTEXT_CONTROL or CONTEXT_INTEGER or $00400000;  { CONTEXT_ARM64 }
+  { Use the unwound context (TestException's frame state). It has correct LR
+    (return address), FP, X19-X28. Only override PC to the target (landing pad
+    after try block). Zeroing LR/FP/X19 would crash on ret or callee-saved use. }
   ContextSetIP(ctx, PtrUInt(target));
-  ctx.Sp := EstablisherFrame;  { Target SP }
-  
-  {$ifdef FPC_DEBUG_WIN64_UNWIND}
-  if IsConsole then
-    writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND] ARM64: using fresh context for RtlUnwindEx');
-  {$endif FPC_DEBUG_WIN64_UNWIND}
+  ctx.Sp := EstablisherFrame;  { Ensure SP matches the frame we're restoring to }
+  { RtlRestoreContext restores only the portions indicated by ContextFlags. Go runtime:
+    LR and callee-saved regs are not restored unless CONTEXT_INTEGER is set. Ensure
+    CONTROL + INTEGER + ARM64 so PC, SP, LR, Fp, X19-X28 are all restored. }
+  ctx.ContextFlags := ctx.ContextFlags and not CONTEXT_UNWOUND_TO_CALL;
+  ctx.ContextFlags := ctx.ContextFlags and not CONTEXT_DEBUG_REGISTERS_ARM64;
+  ctx.ContextFlags := ctx.ContextFlags or CONTEXT_ARM64 or CONTEXT_CONTROL_ARM64 or CONTEXT_INTEGER_ARM64;
 
   FillChar(UnwindHistory, sizeof(UnwindHistory), 0);
   UnwindHistory.Unwind := 1;
@@ -493,7 +501,7 @@ begin
       ', target=$',hexstr(PtrUInt(target),16),')');
     writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND]   ctx: Pc=$',hexstr(ctx.Pc,16),' Sp=$',hexstr(ctx.Sp,16),
       ' Fp=$',hexstr(ctx.Fp,16),' Lr=$',hexstr(ctx.Lr,16));
-    writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND]   ctx: X19=$',hexstr(ctx.X19,16),' CtxFlags=$',hexstr(ctx.ContextFlags,8));
+    writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND]   ctx: X19=$',hexstr(ctx.X19,16),' Cpsr=$',hexstr(ctx.Cpsr,8),' CtxFlags=$',hexstr(ctx.ContextFlags,8));
   end;
   {$endif FPC_DEBUG_WIN64_UNWIND}
   RtlUnwindEx(FrameToUse, target, nil, nil, @ctx, @UnwindHistory);
