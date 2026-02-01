@@ -9,6 +9,20 @@ Research on what could be wrong with `_fpc_local_unwind` / `RtlUnwindEx` from tr
 
 So we pass a **pre-unwound** context (TestException’s frame, PC = landing pad) and use our computed EstablisherFrame as TargetFrame.
 
+### 1a. ARM64 ContextFlags – what we save and restore
+
+Windows ARM64 `CONTEXT` (winnt.h) has these **ContextFlags**; we save and restore all user-visible state except debug regs:
+
+| Flag | Value | Meaning |
+|------|--------|--------|
+| CONTEXT_ARM64 | $00400000 | Base/architecture identifier |
+| CONTEXT_CONTROL_ARM64 | $400001 | PC, SP, LR, Cpsr |
+| CONTEXT_INTEGER_ARM64 | $400002 | X0–X30 (incl. Fp=X29, Lr=X30) |
+| CONTEXT_FLOATING_POINT_ARM64 | $400004 | V[32] NEON, Fpcr, Fpsr (SIMD/FP; **no separate “GPU” flag**) |
+| CONTEXT_DEBUG_REGISTERS_ARM64 | $00100000 | Bcr, Bvr, Wcr, Wvr – **we clear for unwind, do not restore** |
+
+We set **CONTEXT_FULL_USER_ARM64** = ARM64 | CONTROL | INTEGER | FLOATING_POINT everywhere we capture or prepare context for restore (before `RtlCaptureContext`, before `RtlUnwindEx`, and in `__FPC_specific_handler` when patching the OS context). We explicitly clear **CONTEXT_DEBUG_REGISTERS_ARM64** and **CONTEXT_UNWOUND_TO_CALL** so we do not restore breakpoints or unwind metadata.
+
 ## 2. RtlUnwindEx and the context we pass
 
 - **MSDN**: ContextRecord “stores context during the unwind operation”.
@@ -156,3 +170,5 @@ In _fpc_local_unwind, **set ctx.ContextFlags before calling RtlCaptureContext** 
 - then `RtlCaptureContext(ctx);`.
 
 This matches Go’s approach (CONTROL | INTEGER before capture) and the GetThreadContext contract (ContextFlags as input). If the OS respects it for RtlCaptureContext, step 1 should then show a non-zero Lr. The context we pass to RtlUnwindEx would still be overwritten at entry (Nynaeve), but the handler patch (ContextFlags + Lr/Fp reinforcement) remains necessary for the final restore.
+
+**Other call sites**: **fpc_RaiseException** also calls `RtlCaptureContext(ctx)` and then `GetBacktrace(ctx, ...)`. On ARM64, without ContextFlags set before the call, ctx.Lr is 0 and GetBacktrace’s leaf-function path (`Context.Pc := Context.Lr`) would get a wrong backtrace. So we set ContextFlags before RtlCaptureContext in fpc_RaiseException on ARM64 as well.

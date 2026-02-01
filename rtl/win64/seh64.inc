@@ -19,18 +19,22 @@ const
                               EXCEPTION_TARGET_UNWIND or EXCEPTION_COLLIDED_UNWIND;
 
   CONTEXT_UNWOUND_TO_CALL   = $20000000;
-  { ARM64 ContextFlags (winnt.h): CONTEXT_ARM64=$00400000 base; CONTROL=$400001 (PC,SP,LR,Cpsr);
-    INTEGER=$400002 (X0-X30 inc. Fp=X29,Lr=X30); FLOATING_POINT=$400004 (V[],Fpcr,Fpsr);
-    DEBUG_REGISTERS=$00100000 (Bcr,Bvr,Wcr,Wvr). We use _ARM64 suffix to avoid clash with x86 in syswin.inc.
-    CONTEXT_INTEGER_ARM64 is the ARM64 CONTEXT_INTEGER (same value 0x400002); there is no separate "CONTEXT_INTEGER"
-    with a different value for ARM64. Go (defs_windows_arm64.go): "LR doesn't come along on Windows 10 unless
-    you also set CONTEXT_INTEGER". So we set CONTROL+INTEGER (+ optionally FLOATING_POINT) for RtlRestoreContext. }
+  { ARM64 ContextFlags (winnt.h). All flags we save/restore:
+    CONTEXT_ARM64=$00400000 (base/architecture);
+    CONTEXT_CONTROL_ARM64=$400001 (PC, SP, LR, Cpsr);
+    CONTEXT_INTEGER_ARM64=$400002 (X0-X30 inc. Fp=X29, Lr=X30);
+    CONTEXT_FLOATING_POINT_ARM64=$400004 (V[32] NEON, Fpcr, Fpsr – SIMD/FP; no separate "GPU" flag);
+    CONTEXT_DEBUG_REGISTERS_ARM64=$00100000 (Bcr, Bvr, Wcr, Wvr – we clear for unwind, do not restore).
+    We use _ARM64 suffix to avoid clash with x86 in syswin.inc. Go: "LR doesn't come along unless CONTEXT_INTEGER".
+    CONTEXT_FULL_USER_ARM64 = ARM64|CONTROL|INTEGER|FLOATING_POINT; we clear DEBUG_REGISTERS and UNWOUND_TO_CALL. }
 {$ifdef CPUAARCH64}
   CONTEXT_CONTROL_ARM64    = $400001;  { PC, SP, LR, Cpsr }
   CONTEXT_INTEGER_ARM64    = $400002;  { X0-X30 inc. Fp=X29, Lr=X30 }
-  CONTEXT_FLOATING_POINT_ARM64 = $400004;  { V[32], Fpcr, Fpsr }
+  CONTEXT_FLOATING_POINT_ARM64 = $400004;  { V[32] NEON, Fpcr, Fpsr }
   CONTEXT_ARM64            = $00400000;
-  CONTEXT_DEBUG_REGISTERS_ARM64 = $00100000;  { Clear before RtlUnwindEx; avoid name clash with wininc }
+  CONTEXT_DEBUG_REGISTERS_ARM64 = $00100000;  { Bcr, Bvr, Wcr, Wvr – clear for unwind; do not restore }
+  { Full user context for capture/restore: control + integer + FP/SIMD. Excludes debug regs. }
+  CONTEXT_FULL_USER_ARM64  = CONTEXT_ARM64 or CONTEXT_CONTROL_ARM64 or CONTEXT_INTEGER_ARM64 or CONTEXT_FLOATING_POINT_ARM64;
 {$endif CPUAARCH64}
 
   UNWIND_HISTORY_TABLE_SIZE = 12;
@@ -425,6 +429,11 @@ var
   ctx: TContext;
   args: array[0..3] of PtrUint;
 begin
+  { On ARM64 Windows, set ContextFlags before RtlCaptureContext so LR (and integer regs)
+    are filled; otherwise GetBacktrace gets ctx.Lr=0 and backtrace is wrong (see _fpc_local_unwind). }
+{$ifdef CPUAARCH64}
+  ctx.ContextFlags := CONTEXT_FULL_USER_ARM64;
+{$endif CPUAARCH64}
   RtlCaptureContext(ctx);
   args[0]:=PtrUint(AnAddr);
   args[1]:=PtrUint(Obj);
@@ -469,7 +478,7 @@ begin
   { Go runtime (defs_windows_arm64.go): "LR doesn't come along on Windows 10 unless you also set
     CONTEXT_INTEGER." Set ContextFlags BEFORE RtlCaptureContext so the OS fills CONTROL+INTEGER
     (PC, SP, LR, X0-X30). Without this, RtlCaptureContext may only fill CONTROL and Lr stays 0. }
-  ctx.ContextFlags := CONTEXT_ARM64 or CONTEXT_CONTROL_ARM64 or CONTEXT_INTEGER_ARM64 or CONTEXT_FLOATING_POINT_ARM64;
+  ctx.ContextFlags := CONTEXT_FULL_USER_ARM64;
   RtlCaptureContext(ctx);
   {$ifdef FPC_DEBUG_WIN64_UNWIND}
   if IsConsole then
@@ -529,10 +538,11 @@ begin
   {$endif FPC_DEBUG_WIN64_UNWIND}
   { RtlRestoreContext restores only the portions indicated by ContextFlags. Go runtime:
     LR and callee-saved regs are not restored unless CONTEXT_INTEGER is set. Ensure
-    CONTROL + INTEGER + ARM64 so PC, SP, LR, Fp, X19-X28 are all restored. }
+    full user context (CONTROL + INTEGER + FLOATING_POINT + ARM64) so PC, SP, LR, Fp,
+    X19-X28 and V[] are all restored. }
   ctx.ContextFlags := ctx.ContextFlags and not CONTEXT_UNWOUND_TO_CALL;
   ctx.ContextFlags := ctx.ContextFlags and not CONTEXT_DEBUG_REGISTERS_ARM64;
-  ctx.ContextFlags := ctx.ContextFlags or CONTEXT_ARM64 or CONTEXT_CONTROL_ARM64 or CONTEXT_INTEGER_ARM64 or CONTEXT_FLOATING_POINT_ARM64;
+  ctx.ContextFlags := ctx.ContextFlags or CONTEXT_FULL_USER_ARM64;
   {$ifdef FPC_DEBUG_WIN64_UNWIND}
   if IsConsole then
   begin
@@ -820,7 +830,7 @@ begin
         so RtlRestoreContext has the right values when CONTEXT_INTEGER is set. }
       context.ContextFlags := context.ContextFlags and not CONTEXT_UNWOUND_TO_CALL;
       context.ContextFlags := context.ContextFlags and not CONTEXT_DEBUG_REGISTERS_ARM64;
-      context.ContextFlags := context.ContextFlags or CONTEXT_ARM64 or CONTEXT_CONTROL_ARM64 or CONTEXT_INTEGER_ARM64 or CONTEXT_FLOATING_POINT_ARM64;
+      context.ContextFlags := context.ContextFlags or CONTEXT_FULL_USER_ARM64;
       dispatch.ContextRecord^.ContextFlags := context.ContextFlags;
       dispatch.ContextRecord^.Lr := context.Lr;
       dispatch.ContextRecord^.Fp := context.Fp;
