@@ -471,12 +471,18 @@ begin
       ' ctx.Sp=$',hexstr(ctx.Sp,16),' EstablisherFrame=$',hexstr(EstablisherFrame,16));
   {$endif FPC_DEBUG_WIN64_UNWIND}
 
-  { Set target PC and clear flags that might confuse the OS. }
+  { CRITICAL: For RtlUnwindEx, we need a FRESH context for the target frame,
+    not the unwound context. RtlUnwindEx will unwind TO this frame and then
+    restore the context. We should pass a minimal context with just the target PC. }
+  FillChar(ctx, sizeof(ctx), 0);
+  ctx.ContextFlags := CONTEXT_CONTROL or CONTEXT_INTEGER or $00400000;  { CONTEXT_ARM64 }
   ContextSetIP(ctx, PtrUInt(target));
-  ctx.ContextFlags := ctx.ContextFlags and not CONTEXT_UNWOUND_TO_CALL;
-  { Clear debug registers flag like .NET does. }
-  ctx.ContextFlags := ctx.ContextFlags and not $00100000;  { CONTEXT_DEBUG_REGISTERS }
-  ctx.ContextFlags := ctx.ContextFlags or $00400000;       { Keep CONTEXT_ARM64 }
+  ctx.Sp := EstablisherFrame;  { Target SP }
+  
+  {$ifdef FPC_DEBUG_WIN64_UNWIND}
+  if IsConsole then
+    writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND] ARM64: using fresh context for RtlUnwindEx');
+  {$endif FPC_DEBUG_WIN64_UNWIND}
 
   FillChar(UnwindHistory, sizeof(UnwindHistory), 0);
   UnwindHistory.Unwind := 1;

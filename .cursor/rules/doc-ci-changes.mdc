@@ -1,0 +1,26 @@
+---
+description: Document CI/workflow and debugging changes with dated notes (in Vault)
+globs: .github/workflows/*.yml,tests/phase2-tests/*
+alwaysApply: false
+---
+
+# Document CI and workflow changes with dated notes
+
+When making significant CI, workflow, or debugging changes in this project:
+
+1. **Add dated notes to the relevant docs** so we can remember what we did and why. Use the **current date** (e.g. Jan 2026). **Docs live in Dropbox Vault** `Projects/fpc/`.
+
+2. **Where to add notes (Vault Projects/fpc/):**
+   - **next-steps-detailed.md** – new subsection or bullet under the right phase/section (e.g. "CI: run both Bounty Boss and ppca64, then fail if either failed (Jan 2026)").
+   - **ci-arm64-plan.md** – short paragraph in the caching / workflow section when the change affects CI behaviour.
+   - **debug-bounty-boss-and-ppca64.md** – note at top or in the relevant section when the change affects Bounty Boss / ppca64 testing or debugging.
+
+3. **What to include in the note:**
+   - **What** we’re doing (e.g. run both Bounty Boss and Verify ppca64 without failing on first failure).
+   - **Why** (e.g. so we see both results and can test whether they’re related).
+   - **Date** (e.g. "Added late Jan 2026" or "Jan 2026" in the heading).
+   - Cross-references to other docs when useful.
+
+4. **Examples of “significant” changes:** Run-order or pass/fail logic in the Windows arm64 job, cache key or save/restore behaviour, new compiler/RTL flags for debugging, adding or changing a test step.
+
+Do this from now on whenever such changes are made.
