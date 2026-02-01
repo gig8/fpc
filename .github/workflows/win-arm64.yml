@@ -71,7 +71,7 @@ jobs:
             compiler/ppcrossa64
             compiler/ppca64
             ${{ runner.temp }}/fpc_install
-          key: fpc-aarch64-win64-${{ runner.os }}-${{ hashFiles('compiler/**', 'rtl/**', 'packages/**', 'Makefile', 'Makefile.fpc') }}-v8
+          key: fpc-aarch64-win64-${{ runner.os }}-${{ hashFiles('compiler/**', 'rtl/**', 'packages/**', 'Makefile', 'Makefile.fpc') }}-v9
 
       - name: Verify FPC cache contents (when cache hit)
         if: steps.cache_fpc.outputs.cache-hit == 'true'
@@ -81,7 +81,7 @@ jobs:
           [ -f "$GITHUB_WORKSPACE/compiler/ppca64" ] || missing="$missing compiler/ppca64"
           [ -d "$RUNNER_TEMP/fpc_install/lib/fpc/${{ env.FPC_VERSION }}/units/aarch64-win64" ] || missing="$missing fpc_install/.../units/aarch64-win64"
           if [ -n "$missing" ]; then
-            echo "::error::FPC cache incomplete (missing:$missing). Bump cache key suffix (-v7 -> -v8) in the workflow to force a fresh build."
+            echo "::error::FPC cache incomplete (missing:$missing). Bump cache key suffix (-v8 -> -v9) in the workflow to force a fresh build."
             exit 1
           fi
           echo "FPC cache OK: ppcrossa64, ppca64, fpc_install present."
@@ -96,7 +96,7 @@ jobs:
             OS_TARGET=win64 \
             FPC=/usr/bin/fpc \
             BINUTILSPREFIX=aarch64-w64-mingw32- \
-            CROSSOPT="-FD$RUNNER_TEMP/llvm-mingw/bin" \
+            CROSSOPT="-FD$RUNNER_TEMP/llvm-mingw/bin -dFPC_DEBUG_WIN64_UNWIND" \
             INSTALL_PREFIX="$RUNNER_TEMP/fpc_install" \
             2>&1 | tee "$RUNNER_TEMP/crossinstall.log"
           exit "${PIPESTATUS[0]}"
@@ -198,20 +198,20 @@ jobs:
             -FD"$RUNNER_TEMP/llvm-mingw/bin" \
             -o"$GITHUB_WORKSPACE/tests/phase2-tests/trap.exe" \
             tests/phase2-tests/trap.pas
-          # Bounty Boss: with fix (default) – emits call to _FPC_local_unwind
+          # Bounty Boss: compile from P2 so .s is written there (fix and no-fix)
+          P2="$GITHUB_WORKSPACE/tests/phase2-tests"
+          cd "$P2"
+          # With fix (default) – emits call to _FPC_local_unwind
           "$PPC" -Twin64 -XPaarch64-w64-mingw32- \
             -Fu"$UP/rtl" -Fu"$UP/rtl-objpas" \
-            -FE"$GITHUB_WORKSPACE/tests/phase2-tests" \
-            -FD"$RUNNER_TEMP/llvm-mingw/bin" \
-            -a -o"$GITHUB_WORKSPACE/tests/phase2-tests/arm64trap.exe" \
-            tests/phase2-tests/arm64trap.pas
-          # Bounty Boss: without fix – emits plain branch to finally (for comparison)
+            -FE. -FD"$RUNNER_TEMP/llvm-mingw/bin" \
+            -a -oarm64trap.exe arm64trap.pas
+          # Without fix – plain branch to finally
           "$PPC" -Twin64 -XPaarch64-w64-mingw32- -dFPC_NO_WIN64_LOCAL_UNWIND \
             -Fu"$UP/rtl" -Fu"$UP/rtl-objpas" \
-            -FE"$GITHUB_WORKSPACE/tests/phase2-tests" \
-            -FD"$RUNNER_TEMP/llvm-mingw/bin" \
-            -a -o"$GITHUB_WORKSPACE/tests/phase2-tests/arm64trap_no_fix.exe" \
-            tests/phase2-tests/arm64trap.pas
+            -FE. -FD"$RUNNER_TEMP/llvm-mingw/bin" \
+            -a -oarm64trap_no_fix.exe arm64trap.pas
+          cd "$GITHUB_WORKSPACE"
           if [ -f tests/phase2-tests/neontest.pas ]; then
             "$PPC" -Twin64 -XPaarch64-w64-mingw32- \
               -Fu"$UP/rtl" -Fu"$UP/rtl-objpas" \
@@ -523,6 +523,7 @@ jobs:
           $dir = if (Test-Path (Join-Path $root 'arm64trap.exe')) { $root } else { (Join-Path $root 'arm64-exes') }
           Push-Location $dir
           Write-Host "=== arm64trap.exe (with fix) ==="
+          # Capture stdout+stderr (RTL unwind debug FPC_DEBUG_WIN64_UNWIND goes to stderr)
           $out = .\arm64trap.exe 2>&1 | Out-String
           Pop-Location
           Write-Host $out
