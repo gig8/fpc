@@ -551,15 +551,15 @@ begin
   end;
   {$endif FPC_DEBUG_WIN64_UNWIND}
 
-  FillChar(UnwindHistory, sizeof(UnwindHistory), 0);
-  UnwindHistory.Unwind := 1;
-  { AI experiment #3: Try FP (x29) as TargetFrame instead of SP.
-    On ARM64 Windows, the unwinder may expect frame pointer for frame identity.
-    The compiler passes "current SP" but ARM64 ABI uses x29 for frame chain. }
+  { AI experiment #2 (bypass): Call RtlRestoreContext directly instead of
+    RtlUnwindEx. This skips the OS unwind loop and tests whether our context
+    setup is correct. If this works, bug is in RtlUnwindEx; if it crashes,
+    bug is in our context setup.
+    WARNING: This skips finally handlers! Only for diagnosis. }
   {$ifdef FPC_DEBUG_WIN64_UNWIND}
   if IsConsole then
   begin
-    writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND] step 7: about to call RtlUnwindEx TargetFrame=ctx.Fp=$',hexstr(ctx.Fp,16),' target=$',hexstr(PtrUInt(target),16));
+    writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND] step 7: BYPASS - about to call RtlRestoreContext (skipping RtlUnwindEx)');
     writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND]   ctx: Pc=$',hexstr(ctx.Pc,16),' Sp=$',hexstr(ctx.Sp,16),
       ' Fp=$',hexstr(ctx.Fp,16),' Lr=$',hexstr(ctx.Lr,16));
     writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND]   ctx: X19=$',hexstr(ctx.X19,16),' Cpsr=$',hexstr(ctx.Cpsr,8));
@@ -567,7 +567,7 @@ begin
     Flush(stderr);  { critical: flush before we never return }
   end;
   {$endif FPC_DEBUG_WIN64_UNWIND}
-  RtlUnwindEx(Pointer(ctx.Fp), target, nil, nil, @ctx, @UnwindHistory);
+  RtlRestoreContext(ctx, nil);
 {$else}
   RtlUnwindEx(frame, target, nil, nil, @ctx, nil);
 {$endif CPUAARCH64}
