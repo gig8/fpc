@@ -71,7 +71,7 @@ jobs:
             compiler/ppcrossa64
             compiler/ppca64
             ${{ runner.temp }}/fpc_install
-          key: fpc-aarch64-win64-${{ runner.os }}-${{ hashFiles('compiler/**', 'rtl/**', 'packages/**', 'Makefile', 'Makefile.fpc') }}-v9
+          key: fpc-aarch64-win64-${{ runner.os }}-${{ hashFiles('compiler/**', 'rtl/**', 'packages/**', 'Makefile', 'Makefile.fpc') }}-v10
 
       - name: Verify FPC cache contents (when cache hit)
         if: steps.cache_fpc.outputs.cache-hit == 'true'
