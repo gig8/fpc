@@ -416,13 +416,21 @@ var
 {$ifdef CPUAARCH64}
   { On ARM64 Windows, EstablisherFrame = Caller-SP (SP just before the call).
     The compiler passes SP; the unwinder expects Caller-SP. Obtain it via
-    RtlVirtualUnwind. See .NET runtime exceptionhandling.cpp, LLVM libunwind. }
+    RtlVirtualUnwind. See .NET runtime exceptionhandling.cpp, LLVM libunwind.
+
+    RtlUnwindEx(TargetFrame, TargetIp, ...) expects TargetFrame to be the
+    EstablisherFrame of the frame that contains TargetIp. TargetIp is in
+    TestException (caller of _fpc_local_unwind). EstablisherFrame of
+    TestException = Caller-SP of TestException = main's SP. So we need TWO
+    unwinds: (1) _fpc_local_unwind -> TestException, (2) TestException -> main.
+    We use the context from unwind 1 and the EstablisherFrame from unwind 2. }
   UnwindHistory: UNWIND_HISTORY_TABLE;
   RuntimeFunction: PRUNTIME_FUNCTION;
   HandlerData: Pointer;
   EstablisherFrame: QWord;
   ImageBase: QWord;
   FrameToUse: Pointer;
+  CtxSaved: TContext;
 {$endif CPUAARCH64}
 begin
   {$ifdef FPC_DEBUG_WIN64_UNWIND}
@@ -434,10 +442,27 @@ begin
   FillChar(UnwindHistory, sizeof(UnwindHistory), 0);
   UnwindHistory.Unwind := 1;
   RtlCaptureContext(ctx);
-  { Unwind once: from _fpc_local_unwind to caller (the frame with try/finally).
-    Use that frame's EstablisherFrame so RtlUnwindEx unwinds to it (runs finally)
-    then continues at TargetIp in that same frame. Two unwinds would target main's
-    frame while TargetIp is in TestException — wrong. }
+
+  { First unwind: _fpc_local_unwind -> TestException (caller).
+    After this, ctx describes TestException's frame. }
+  RuntimeFunction := RtlLookupFunctionEntry(ContextGetIP(ctx), ImageBase, @UnwindHistory);
+  if Assigned(RuntimeFunction) then
+    RtlVirtualUnwind(UNW_FLAG_NHANDLER, ImageBase, ContextGetIP(ctx),
+      RuntimeFunction, ctx, @HandlerData, @EstablisherFrame, nil)
+  else
+  begin
+    ctx.Pc := ctx.Lr;
+    ctx.ContextFlags := ctx.ContextFlags or CONTEXT_UNWOUND_TO_CALL;
+  end;
+  { Save TestException's context; we'll pass this to RtlUnwindEx. }
+  CtxSaved := ctx;
+  {$ifdef FPC_DEBUG_WIN64_UNWIND}
+  if IsConsole then
+    writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND] ARM64: after 1st unwind, ctx.Pc=$',hexstr(ctx.Pc,16),' ctx.Sp=$',hexstr(ctx.Sp,16));
+  {$endif FPC_DEBUG_WIN64_UNWIND}
+
+  { Second unwind: TestException -> main (its caller).
+    We only need EstablisherFrame from this; ctx now describes main. }
   RuntimeFunction := RtlLookupFunctionEntry(ContextGetIP(ctx), ImageBase, @UnwindHistory);
   if Assigned(RuntimeFunction) then
     RtlVirtualUnwind(UNW_FLAG_NHANDLER, ImageBase, ContextGetIP(ctx),
@@ -448,16 +473,14 @@ begin
     ctx.ContextFlags := ctx.ContextFlags or CONTEXT_UNWOUND_TO_CALL;
   end;
   FrameToUse := Pointer(EstablisherFrame);
-  { Set continuation PC in context so the OS restores to TargetIp in the target frame.
-    After one unwind ctx describes TestException's frame; without this the context
-    has PC = return address after the call — the OS may or may not overwrite with
-    TargetIp on ARM64, so set it explicitly. }
-  ContextSetIP(ctx, PtrUInt(target));
   {$ifdef FPC_DEBUG_WIN64_UNWIND}
   if IsConsole then
-    writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND] ARM64: using EstablisherFrame=$',hexstr(EstablisherFrame,16),' (Caller-SP)');
+    writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND] ARM64: after 2nd unwind, EstablisherFrame=$',hexstr(EstablisherFrame,16),' (TestException Caller-SP = main SP)');
   {$endif FPC_DEBUG_WIN64_UNWIND}
-  RtlUnwindEx(FrameToUse, target, nil, nil, @ctx, @UnwindHistory);
+
+  { Set continuation PC in the saved context (TestException's frame). }
+  ContextSetIP(CtxSaved, PtrUInt(target));
+  RtlUnwindEx(FrameToUse, target, nil, nil, @CtxSaved, @UnwindHistory);
 {$else}
   RtlUnwindEx(frame, target, nil, nil, @ctx, nil);
 {$endif CPUAARCH64}
