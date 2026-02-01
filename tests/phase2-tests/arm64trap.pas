@@ -12,6 +12,38 @@
 program arm64trap;
 {$mode objfpc}
 
+{ Minimal types for Vectored Exception Handler to log crash (ExceptionCode + ExceptionAddress). }
+type
+  PExceptionRecord = ^TExceptionRecord;
+  TExceptionRecord = record
+    ExceptionCode: LongWord;
+    ExceptionFlags: LongWord;
+    ExceptionRecord: PExceptionRecord;
+    ExceptionAddress: Pointer;
+    NumberParameters: LongWord;
+    ExceptionInformation: array[0..14] of PtrUInt;
+  end;
+  PExceptionPointers = ^TExceptionPointers;
+  TExceptionPointers = record
+    ExceptionRecord: PExceptionRecord;
+    ContextRecord: Pointer;
+  end;
+  TVectoredHandler = function(excep: PExceptionPointers): LongInt; stdcall;
+
+function AddVectoredExceptionHandler(First: DWord; Handler: TVectoredHandler): Pointer;
+  external 'kernel32' name 'AddVectoredExceptionHandler';
+
+function LogExceptionVEH(excep: PExceptionPointers): LongInt; stdcall;
+begin
+  if (excep <> nil) and (excep^.ExceptionRecord <> nil) then
+  begin
+    writeln(stderr, '[VEH] ExceptionCode=$', HexStr(excep^.ExceptionRecord^.ExceptionCode, 8),
+      ' ExceptionAddress=$', HexStr(PtrUInt(excep^.ExceptionRecord^.ExceptionAddress), 16));
+    Flush(stderr);
+  end;
+  Result := 0;  { EXCEPTION_CONTINUE_SEARCH }
+end;
+
 procedure DumpFrames(const tag: string);
 var
   frames: array[0..31] of CodePointer;
@@ -50,6 +82,7 @@ begin
 end;
 
 begin
+  AddVectoredExceptionHandler(1, @LogExceptionVEH);  { log any exception (code + address) before other handlers }
   TestException;
   writeln('DEBUG: Back in main (after TestException)');
   Flush(Output);
