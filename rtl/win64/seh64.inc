@@ -803,25 +803,22 @@ begin
       if IsConsole then
       begin
         writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND] UNWIND: patch context ContextFlags=$',hexstr(dispatch.ContextRecord^.ContextFlags,8),
-          ' Lr=$',hexstr(dispatch.ContextRecord^.Lr,16),' Sp=$',hexstr(dispatch.ContextRecord^.Sp,16),' Fp=$',hexstr(dispatch.ContextRecord^.Fp,16));
+          ' Pc=$',hexstr(dispatch.ContextRecord^.Pc,16),' Sp=$',hexstr(dispatch.ContextRecord^.Sp,16),' Lr=$',hexstr(dispatch.ContextRecord^.Lr,16),' Fp=$',hexstr(dispatch.ContextRecord^.Fp,16));
         Flush(stderr);
       end;
       {$endif FPC_DEBUG_WIN64_UNWIND}
-      { Reinforce PC and SP so the OS restores to the landing pad with correct stack. }
-      context.Pc := dispatch.TargetIp;
-      context.Sp := dispatch.EstablisherFrame;
+      { Do NOT overwrite Pc/Sp: when we are called with EXCEPTION_UNWINDING, dispatch.TargetIp
+        and dispatch.EstablisherFrame refer to the frame being unwound (e.g. finally), not the
+        RtlUnwindEx target. Overwriting would corrupt the context. Only patch ContextFlags
+        so RtlRestoreContext restores LR/FP (CONTEXT_INTEGER). }
       context.ContextFlags := context.ContextFlags and not CONTEXT_UNWOUND_TO_CALL;
       context.ContextFlags := context.ContextFlags and not CONTEXT_DEBUG_REGISTERS_ARM64;
       context.ContextFlags := context.ContextFlags or CONTEXT_ARM64 or CONTEXT_CONTROL_ARM64 or CONTEXT_INTEGER_ARM64 or CONTEXT_FLOATING_POINT_ARM64;
-      { Ensure the OS uses our patched context: write back to ContextRecord (may be same as context). }
       dispatch.ContextRecord^.ContextFlags := context.ContextFlags;
-      dispatch.ContextRecord^.Pc := context.Pc;
-      dispatch.ContextRecord^.Sp := context.Sp;
       {$ifdef FPC_DEBUG_WIN64_UNWIND}
       if IsConsole then
       begin
-        writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND] UNWIND: after patch ContextFlags=$',hexstr(dispatch.ContextRecord^.ContextFlags,8),
-          ' Pc=$',hexstr(dispatch.ContextRecord^.Pc,16),' Sp=$',hexstr(dispatch.ContextRecord^.Sp,16));
+        writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND] UNWIND: after patch ContextFlags=$',hexstr(dispatch.ContextRecord^.ContextFlags,8));
         Flush(stderr);
       end;
       {$endif FPC_DEBUG_WIN64_UNWIND}
