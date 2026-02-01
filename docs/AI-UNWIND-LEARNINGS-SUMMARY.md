@@ -77,9 +77,14 @@ Commits on top of feature/win-aarch64:
 
 - **opus45 options.pas fix:** Cherry-picked `ebee79394d` (target CPU macros for cross-compilation) and `0e080caab8` (nested comment fix). CI glob for `feature/win-aarch64*` was already on this branch. The RTL is now built with CPUAARCH64 (and other target macros) defined when cross-compiling to aarch64-win64.
 
+**Additional debug (2026-02-01):** To diagnose which register is wrong at the landing pad and to confirm the "landing pad ~3MB from caller" observation:
+- **_fpc_local_unwind** (FPC_DEBUG_WIN64_UNWIND): step 3 now logs `frame(compiler)`, `target`, `delta_target_caller` (target − caller Pc), and labels ctx.Pc as caller.
+- **Handler:** "after patch" now logs Pc, Sp, Lr, Fp (not only ContextFlags).
+- **arm64trap VEH:** logs **ContextAtFault** (Pc, Sp, Lr, Fp, ContextFlags) from the exception context so we see the actual register state at the fault. CI artifact and notice include this.
+
 **Next plan (in order):**
 
-1. **Run CI** on feature/win-aarch64 to confirm the options.pas change: build still succeeds and arm64trap still runs (even if it still crashes at landing pad). This confirms ARM64 code path is present and exercised.
+1. **Run CI** on feature/win-aarch64 to confirm the options.pas change: build still succeeds and arm64trap still runs (even if it still crashes at landing pad). This confirms ARM64 code path is present and exercised. Inspect new debug: delta_target_caller, VEH ContextAtFault (which of Sp/Lr/Fp is wrong).
 2. **If crash persists:** Run the **bypass experiment** (step 2 in §4): in `_fpc_local_unwind`, after setting up `ctx`, call `RtlRestoreContext(@ctx, nil)` instead of `RtlUnwindEx`. If we land correctly → bug is inside RtlUnwindEx. If we still fault → bug is in our context/EstablisherFrame setup.
 3. **If bypass still faults:** Inspect **landing pad vs caller** (opus45 finding: landing pad address ~3MB from caller PC is suspicious). Consider .pdata/.xdata for TestException and _fpc_local_unwind (`llvm-objdump -u arm64trap.exe`), and whether we can pass or compute **Local-SP** for the landing-pad frame.
 4. **Optional low-risk test:** Try **FP as TargetFrame** (step 3 in §4) in a short-lived branch; opus45 already tried this and got INVALID_UNWIND_TARGET, so only if we have new evidence it might help.

@@ -511,8 +511,10 @@ begin
   {$ifdef FPC_DEBUG_WIN64_UNWIND}
   if IsConsole then
   begin
-    writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND] step 3: after unwind ctx.Pc=$',hexstr(ctx.Pc,16),
+    writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND] step 3: after unwind ctx.Pc(caller)=$',hexstr(ctx.Pc,16),
       ' Sp=$',hexstr(ctx.Sp,16),' EstablisherFrame=$',hexstr(EstablisherFrame,16),' Lr=$',hexstr(ctx.Lr,16));
+    writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND] step 3: frame(compiler)=$',hexstr(PtrUInt(frame),16),' target=$',hexstr(PtrUInt(target),16),
+      ' delta_target_caller=$',hexstr(PtrUInt(target)-ctx.Pc,16));
     Flush(stderr);
   end;
   {$endif FPC_DEBUG_WIN64_UNWIND}
@@ -837,7 +839,9 @@ begin
       {$ifdef FPC_DEBUG_WIN64_UNWIND}
       if IsConsole then
       begin
-        writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND] UNWIND: after patch ContextFlags=$',hexstr(dispatch.ContextRecord^.ContextFlags,8));
+        writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND] UNWIND: after patch ContextFlags=$',hexstr(dispatch.ContextRecord^.ContextFlags,8),
+          ' Pc=$',hexstr(dispatch.ContextRecord^.Pc,16),' Sp=$',hexstr(dispatch.ContextRecord^.Sp,16),
+          ' Lr=$',hexstr(dispatch.ContextRecord^.Lr,16),' Fp=$',hexstr(dispatch.ContextRecord^.Fp,16));
         Flush(stderr);
       end;
       {$endif FPC_DEBUG_WIN64_UNWIND}

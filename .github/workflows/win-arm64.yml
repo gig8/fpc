@@ -559,6 +559,9 @@ jobs:
           if ($out -match '\[VEH\] ExceptionCode=\$([0-9A-Fa-f]+) ExceptionAddress=\$([0-9A-Fa-f]+)') {
             Write-Host "::notice::VEH fault: ExceptionCode (first) = $($Matches[1]), ExceptionAddress = $($Matches[2])"
           }
+          if ($out -match '\[VEH\] ContextAtFault (Pc=\$[0-9A-Fa-f]+ Sp=\$[0-9A-Fa-f]+ Lr=\$[0-9A-Fa-f]+ Fp=\$[0-9A-Fa-f]+)') {
+            Write-Host "::notice::VEH context at fault: $($Matches[1]) (see artifact for full line)"
+          }
           exit 0
         shell: pwsh
 
