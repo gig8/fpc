@@ -480,10 +480,19 @@ begin
 
   { Set continuation PC in the saved context (TestException's frame). }
   ContextSetIP(CtxSaved, PtrUInt(target));
+  { .NET FixupDispatcherContext clears CONTEXT_UNWOUND_TO_CALL before passing
+    context to the OS for redirect/collided unwind - the flag can confuse the OS. }
+  CtxSaved.ContextFlags := CtxSaved.ContextFlags and not CONTEXT_UNWOUND_TO_CALL;
   { Use a fresh UnwindHistory for RtlUnwindEx; ours was populated by
     RtlVirtualUnwind and could confuse the OS unwinder. }
   FillChar(UnwindHistory, sizeof(UnwindHistory), 0);
   UnwindHistory.Unwind := 1;
+  {$ifdef FPC_DEBUG_WIN64_UNWIND}
+  if IsConsole then
+    writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND] ARM64: before RtlUnwindEx CtxSaved: Pc=$',hexstr(CtxSaved.Pc,16),
+      ' Sp=$',hexstr(CtxSaved.Sp,16),' Fp=$',hexstr(CtxSaved.Fp,16),' Lr=$',hexstr(CtxSaved.Lr,16),
+      ' CtxFlags=$',hexstr(CtxSaved.ContextFlags,8));
+  {$endif FPC_DEBUG_WIN64_UNWIND}
   RtlUnwindEx(FrameToUse, target, nil, nil, @CtxSaved, @UnwindHistory);
 {$else}
   RtlUnwindEx(frame, target, nil, nil, @ctx, nil);
