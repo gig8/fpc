@@ -19,12 +19,16 @@ const
                               EXCEPTION_TARGET_UNWIND or EXCEPTION_COLLIDED_UNWIND;
 
   CONTEXT_UNWOUND_TO_CALL   = $20000000;
-  { ARM64: CONTEXT_CONTROL (0x400001) = PC, SP, LR, Cpsr; CONTEXT_INTEGER (0x400002) = X0-X30.
-    Go runtime (defs_windows_arm64.go): "LR doesn't come along on Windows 10 unless you also set
-    CONTEXT_INTEGER". So we must set both for RtlRestoreContext to restore LR and callee-saved regs. }
+  { ARM64 ContextFlags (winnt.h): CONTEXT_ARM64=$00400000 base; CONTROL=$400001 (PC,SP,LR,Cpsr);
+    INTEGER=$400002 (X0-X30 inc. Fp=X29,Lr=X30); FLOATING_POINT=$400004 (V[],Fpcr,Fpsr);
+    DEBUG_REGISTERS=$00100000 (Bcr,Bvr,Wcr,Wvr). We use _ARM64 suffix to avoid clash with x86 in syswin.inc.
+    CONTEXT_INTEGER_ARM64 is the ARM64 CONTEXT_INTEGER (same value 0x400002); there is no separate "CONTEXT_INTEGER"
+    with a different value for ARM64. Go (defs_windows_arm64.go): "LR doesn't come along on Windows 10 unless
+    you also set CONTEXT_INTEGER". So we set CONTROL+INTEGER (+ optionally FLOATING_POINT) for RtlRestoreContext. }
 {$ifdef CPUAARCH64}
   CONTEXT_CONTROL_ARM64    = $400001;  { PC, SP, LR, Cpsr }
   CONTEXT_INTEGER_ARM64    = $400002;  { X0-X30 inc. Fp=X29, Lr=X30 }
+  CONTEXT_FLOATING_POINT_ARM64 = $400004;  { V[32], Fpcr, Fpsr }
   CONTEXT_ARM64            = $00400000;
   CONTEXT_DEBUG_REGISTERS_ARM64 = $00100000;  { Clear before RtlUnwindEx; avoid name clash with wininc }
 {$endif CPUAARCH64}
@@ -524,7 +528,7 @@ begin
     CONTROL + INTEGER + ARM64 so PC, SP, LR, Fp, X19-X28 are all restored. }
   ctx.ContextFlags := ctx.ContextFlags and not CONTEXT_UNWOUND_TO_CALL;
   ctx.ContextFlags := ctx.ContextFlags and not CONTEXT_DEBUG_REGISTERS_ARM64;
-  ctx.ContextFlags := ctx.ContextFlags or CONTEXT_ARM64 or CONTEXT_CONTROL_ARM64 or CONTEXT_INTEGER_ARM64;
+  ctx.ContextFlags := ctx.ContextFlags or CONTEXT_ARM64 or CONTEXT_CONTROL_ARM64 or CONTEXT_INTEGER_ARM64 or CONTEXT_FLOATING_POINT_ARM64;
   {$ifdef FPC_DEBUG_WIN64_UNWIND}
   if IsConsole then
   begin
@@ -787,36 +791,37 @@ begin
       Flush(stderr);
     end;
     {$endif FPC_DEBUG_WIN64_UNWIND}
-    { When EXCEPTION_TARGET_UNWIND is set, we are the handler for the target frame.
-      Patch context so RtlRestoreContext restores LR and callee-saved regs on ARM64.
-      Do this first: the landing pad is often *after* the try-finally scope (RvaEnd
-      is end of try/finally block), so (TargetRva in scope) is false and we would
-      never hit the patch inside the scope loop. }
+    { ARM64: The OS often calls us only with EXCEPTION_UNWINDING (0x02), not
+      EXCEPTION_TARGET_UNWIND (0x08). Patch the context on every unwind call so
+      RtlRestoreContext restores LR and callee-saved regs when the OS later
+      restores to the target. Without this, the context used for restore may not
+      have CONTEXT_INTEGER set and we fault at the landing pad (str x0,[sp]). }
 {$ifdef CPUAARCH64}
-    if (rec.ExceptionFlags and EXCEPTION_TARGET_UNWIND)<>0 then
+    if (dispatch.ContextRecord<>nil) then
     begin
       {$ifdef FPC_DEBUG_WIN64_UNWIND}
-      if IsConsole and (dispatch.ContextRecord<>nil) then
+      if IsConsole then
       begin
-        writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND] TARGET_UNWIND: before patch ContextFlags=$',hexstr(dispatch.ContextRecord^.ContextFlags,8),
+        writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND] UNWIND: patch context ContextFlags=$',hexstr(dispatch.ContextRecord^.ContextFlags,8),
           ' Lr=$',hexstr(dispatch.ContextRecord^.Lr,16),' Sp=$',hexstr(dispatch.ContextRecord^.Sp,16),' Fp=$',hexstr(dispatch.ContextRecord^.Fp,16));
         Flush(stderr);
       end;
       {$endif FPC_DEBUG_WIN64_UNWIND}
       context.ContextFlags := context.ContextFlags and not CONTEXT_UNWOUND_TO_CALL;
       context.ContextFlags := context.ContextFlags and not CONTEXT_DEBUG_REGISTERS_ARM64;
-      context.ContextFlags := context.ContextFlags or CONTEXT_ARM64 or CONTEXT_CONTROL_ARM64 or CONTEXT_INTEGER_ARM64;
-      if dispatch.ContextRecord<>nil then
-        dispatch.ContextRecord^.ContextFlags := context.ContextFlags;
+      context.ContextFlags := context.ContextFlags or CONTEXT_ARM64 or CONTEXT_CONTROL_ARM64 or CONTEXT_INTEGER_ARM64 or CONTEXT_FLOATING_POINT_ARM64;
+      dispatch.ContextRecord^.ContextFlags := context.ContextFlags;
       {$ifdef FPC_DEBUG_WIN64_UNWIND}
-      if IsConsole and (dispatch.ContextRecord<>nil) then
+      if IsConsole then
       begin
-        writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND] TARGET_UNWIND: after patch ContextFlags=$',hexstr(dispatch.ContextRecord^.ContextFlags,8));
+        writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND] UNWIND: after patch ContextFlags=$',hexstr(dispatch.ContextRecord^.ContextFlags,8));
         Flush(stderr);
       end;
       {$endif FPC_DEBUG_WIN64_UNWIND}
-      Exit;
     end;
+    { If the OS did set EXCEPTION_TARGET_UNWIND, we are the target frame; do not run the finally. }
+    if (rec.ExceptionFlags and EXCEPTION_TARGET_UNWIND)<>0 then
+      Exit;
 {$endif CPUAARCH64}
 {$ifdef DEBUG_SEH}
     if IsConsole then

@@ -543,11 +543,11 @@ jobs:
             Write-Host "Bounty Boss (fix) failed: expected 'Success: Finally block executed!'. Got: $out"
           }
           echo "bounty_boss_ok=$ok" >> $env:GITHUB_OUTPUT
-          # Report unwind diagnostics: did we hit TARGET_UNWIND patch? UNWIND branch? VEH fault address?
-          if ($out -match '\[FPC_DEBUG_WIN64_UNWIND\] TARGET_UNWIND: before patch') {
-            Write-Host "::notice::TARGET_UNWIND patch was hit (context patch applied)"
+          # Report unwind diagnostics: context patch (UNWIND or TARGET_UNWIND)? UNWIND branch? VEH fault?
+          if ($out -match '\[FPC_DEBUG_WIN64_UNWIND\] (UNWIND: patch context|TARGET_UNWIND: before patch)') {
+            Write-Host "::notice::Context patch was applied (UNWIND or TARGET_UNWIND path)"
           } else {
-            Write-Host "::warning::TARGET_UNWIND patch was NOT hit (no 'TARGET_UNWIND: before patch' in output)"
+            Write-Host "::warning::Context patch was NOT seen (no UNWIND/TARGET_UNWIND patch log in output)"
           }
           if ($out -match '\[FPC_DEBUG_WIN64_UNWIND\] UNWIND branch ExceptionFlags=') {
             Write-Host "::notice::UNWIND branch was entered (handler called during unwind)"

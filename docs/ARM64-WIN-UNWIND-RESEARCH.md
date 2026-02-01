@@ -72,7 +72,7 @@ So we pass a **pre-unwound** context (TestException’s frame, PC = landing pad)
 
 **Conclusion**: RtlUnwindEx overwrites our context at entry; the context passed to RtlRestoreContext is the OS-built one and likely did not have CONTEXT_INTEGER set, so LR (and possibly FP/X19–X28) were not restored. The first instruction at the landing pad then faults (e.g. load/store using bad FP or stack).
 
-**Fix**: In `__FPC_specific_handler`, when we are the target frame (EXCEPTION_TARGET_UNWIND), **patch** the context at the **start** of the unwind branch (landing pad is after the try-finally scope, so "TargetRva in scope" was always false). Set `ContextFlags` to include CONTEXT_ARM64, CONTEXT_CONTROL_ARM64, CONTEXT_INTEGER_ARM64 so RtlRestoreContext restores PC, SP, LR, FP, X19–X28.
+**Fix**: In `__FPC_specific_handler`, **patch** the context at the **start** of the unwind branch. CI showed the OS calls us with **ExceptionFlags=$00000002 (EXCEPTION_UNWINDING only)**; **EXCEPTION_TARGET_UNWIND (0x08) is never set** on this path. So we patch on **every** unwind call (not only when EXCEPTION_TARGET_UNWIND is set). Set `ContextFlags` to include CONTEXT_ARM64, CONTEXT_CONTROL_ARM64, CONTEXT_INTEGER_ARM64, CONTEXT_FLOATING_POINT_ARM64 so RtlRestoreContext restores PC, SP, LR, FP, X19–X28 (and V[] if needed).
 
 ## 10. Assembly analysis (arm64trap_disasm.txt)
 
@@ -89,7 +89,7 @@ So we pass a **pre-unwound** context (TestException’s frame, PC = landing pad)
 ### What to inspect on the ARM64 machine
 
 1. **Handler logs**  
-   With `FPC_DEBUG_WIN64_UNWIND`, we now log when we hit EXCEPTION_TARGET_UNWIND: ContextFlags, Lr, Sp, Fp before/after patch. If we **never** see "TARGET_UNWIND: before patch", we're still not in the right path (e.g. handler not called for target frame, or different build). If we **do** see it:
+   With `FPC_DEBUG_WIN64_UNWIND`, we log "UNWIND: patch context" (and "UNWIND: after patch") on every unwind call; we also log "TARGET_UNWIND: before patch" if the OS ever sets EXCEPTION_TARGET_UNWIND. CI showed only "UNWIND branch ExceptionFlags=$00000002" (EXCEPTION_UNWINDING), so we now patch on every unwind call. If we **do** see "UNWIND: patch context":
    - **Lr or Fp is 0 (or clearly wrong)** → the OS-built context didn't fill integer/control state; our flag patch alone won't fix it (we'd need to supply correct values, which we don't have in the handler).
    - **Lr/Sp/Fp look plausible** but we still fault → either the OS overwrites the context after we return, or RtlRestoreContext ignores our flags on this path.
 
