@@ -82,3 +82,23 @@ Fix a **crash on ARM64 Windows** when `exit` (or break/continue) is used inside 
 - `.github/workflows/win-arm64.yml` — CI: builds FPC, generates arm64trap.pas, compiles and runs arm64trap.exe; defines FPC_DEBUG_WIN64_UNWIND for RTL logs.
 
 We need either a **code or configuration change** that makes the landing pad run without fault, or **concrete evidence** (e.g. which register is wrong, or OS version/behavior) to pursue an OS bug or alternate approach (e.g. different unwind strategy).
+
+---
+
+## ROOT CAUSE FOUND (Feb 2026)
+
+The ARM64-specific code in `_fpc_local_unwind` (`rtl/win64/seh64.inc`) was **never being compiled** when cross-compiling from x86_64 to aarch64! The problem was in `compiler/options.pas`:
+
+The `{$ifdef CPUAARCH64}` blocks that define CPU macros use compile-time checks based on the **HOST** architecture, not the **TARGET** architecture. When the x86_64 host compiler cross-compiles code for aarch64:
+- `{$ifdef aarch64}` is FALSE (host is x86_64)
+- Therefore `def_system_macro('CPUAARCH64')` was never called
+- RTL code using `{$ifdef CPUAARCH64}` took the `{$else}` branch
+- The ARM64-specific unwind logic (RtlCaptureContext, RtlVirtualUnwind, context setup) was skipped
+- Only the simple x86_64 fallback path was compiled: `RtlUnwindEx(frame, target, nil, nil, @ctx, nil)`
+
+**The fix** (in `compiler/options.pas`): Added runtime TARGET-based macro definitions. After the existing `{$ifdef}` blocks, we now check `target_info.cpu` and define the appropriate CPU macros (CPUAARCH64, CPUX86_64, etc.) for the target architecture. This ensures cross-compiled code gets the correct CPU defines.
+
+**Next steps:**
+1. Run CI with the updated `compiler/options.pas`. The ARM64-specific code in `_fpc_local_unwind` should now be compiled.
+2. Look for debug output from steps 0-7 in `FPC_DEBUG_WIN64_UNWIND` to verify the ARM64 code path is being executed.
+3. If still crashing after fix, the original hypotheses (context overwrite, frame mismatch) may still apply.

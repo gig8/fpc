@@ -150,7 +150,25 @@ So: if it still doesn’t work, the next steps are (1) use the handler logs and 
 - Go: `src/runtime/defs_windows_arm64.go` (CONTEXT_CONTROL + CONTEXT_INTEGER for LR on Windows 10 ARM64).
 - Stack Overflow: RtlRestoreContext and STATUS_UNWIND_CONSOLIDATE; longjmp landing wrong on 64-bit Windows.
 
-## 13. Lr=0 after RtlCaptureContext – investigation
+## 13. ROOT CAUSE FOUND: CPUAARCH64 not defined during cross-compilation (Feb 2026)
+
+**Problem:** When cross-compiling from x86_64 to aarch64, the `CPUAARCH64` macro was never defined. This caused all the ARM64-specific code in `_fpc_local_unwind` to be skipped, with only the simple x86_64 fallback path being compiled.
+
+**Root cause location:** `compiler/options.pas`, in the `def_cpu_macros` procedure. The code uses `{$ifdef aarch64}` (and similar for other CPUs) to define `CPUAARCH64`. This is a compile-time HOST check, not a runtime TARGET check. When the x86_64 host builds a cross-compiler for aarch64, `{$ifdef aarch64}` is false, so `def_system_macro('CPUAARCH64')` is never called.
+
+**The fix:** Added runtime checks based on `target_info.cpu` to define the appropriate CPU macros for the target architecture. After the existing `{$ifdef}` blocks, we now have:
+```pascal
+if target_info.cpu=cpu_aarch64 then
+  begin
+    def_system_macro('CPUAARCH64');
+    def_system_macro('CPU64');
+  end
+```
+This ensures that when cross-compiling to aarch64, the `CPUAARCH64` macro is defined, and RTL code using `{$ifdef CPUAARCH64}` will compile the ARM64-specific code path.
+
+---
+
+## 14. Lr=0 after RtlCaptureContext – investigation
 
 ### Observation
 

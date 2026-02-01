@@ -4832,6 +4832,149 @@ procedure read_arguments(cmd:TCmdStr);
         def_system_macro('FPC_LOCALS_ARE_STACK_REG_RELATIVE');
       {$endif loongarch64}
 
+      { Cross-compilation support: define CPU macros based on TARGET architecture.
+        The {$ifdef} blocks above define macros based on HOST architecture. When
+        cross-compiling, we must also define the target CPU macros so RTL code
+        using {$ifdef CPUAARCH64} etc. compiles correctly. }
+      if target_info.cpu=cpu_i386 then
+        begin
+          def_system_macro('CPUI386');
+          def_system_macro('CPU32');
+          def_system_macro('CPUX86');
+        end
+      else if target_info.cpu=cpu_x86_64 then
+        begin
+          def_system_macro('CPUX86_64');
+          def_system_macro('CPUAMD64');
+          def_system_macro('CPU64');
+          def_system_macro('CPUX64');
+        end
+      else if target_info.cpu=cpu_arm then
+        begin
+          def_system_macro('CPUARM');
+          def_system_macro('CPU32');
+        end
+      else if target_info.cpu=cpu_aarch64 then
+        begin
+          def_system_macro('CPUAARCH64');
+          def_system_macro('CPU64');
+        end
+      else if target_info.cpu=cpu_powerpc then
+        begin
+          def_system_macro('CPUPOWERPC');
+          def_system_macro('CPUPOWERPC32');
+          def_system_macro('CPU32');
+        end
+      else if target_info.cpu=cpu_powerpc64 then
+        begin
+          def_system_macro('CPUPOWERPC');
+          def_system_macro('CPUPOWERPC64');
+          def_system_macro('CPU64');
+        end
+      else if target_info.cpu=cpu_sparc then
+        begin
+          def_system_macro('CPUSPARCGEN');
+          def_system_macro('CPUSPARC');
+          def_system_macro('CPUSPARC32');
+          def_system_macro('CPU32');
+        end
+      else if target_info.cpu=cpu_sparc64 then
+        begin
+          def_system_macro('CPUSPARCGEN');
+          def_system_macro('CPUSPARC64');
+          def_system_macro('CPU64');
+        end
+      else if target_info.cpu=cpu_m68k then
+        begin
+          def_system_macro('CPU68');
+          def_system_macro('CPU68K');
+          def_system_macro('CPUM68K');
+          def_system_macro('CPU32');
+        end
+      else if target_info.cpu=cpu_mipseb then
+        begin
+          def_system_macro('CPUMIPS');
+          def_system_macro('CPUMIPSEB');
+          def_system_macro('CPUMIPS32');
+          def_system_macro('CPUMIPSEB32');
+          def_system_macro('CPU32');
+        end
+      else if target_info.cpu=cpu_mipsel then
+        begin
+          def_system_macro('CPUMIPS');
+          def_system_macro('CPUMIPSEL');
+          def_system_macro('CPUMIPS32');
+          def_system_macro('CPUMIPSEL32');
+          def_system_macro('CPU32');
+        end
+      else if target_info.cpu=cpu_mips64 then
+        begin
+          def_system_macro('CPUMIPS');
+          def_system_macro('CPUMIPS64');
+          def_system_macro('CPUMIPSEB64');
+          def_system_macro('CPUMIPS64EB');
+          def_system_macro('CPU64');
+        end
+      else if target_info.cpu=cpu_mips64el then
+        begin
+          def_system_macro('CPUMIPS');
+          def_system_macro('CPUMIPS64');
+          def_system_macro('CPUMIPSEL64');
+          def_system_macro('CPUMIPS64EL');
+          def_system_macro('CPU64');
+        end
+      else if target_info.cpu=cpu_avr then
+        begin
+          def_system_macro('CPUAVR');
+          def_system_macro('CPU16');
+        end
+      else if target_info.cpu=cpu_jvm then
+        begin
+          def_system_macro('CPUJVM');
+          def_system_macro('CPU32');
+        end
+      else if target_info.cpu=cpu_i8086 then
+        begin
+          def_system_macro('CPU86');
+          def_system_macro('CPU87');
+          def_system_macro('CPUI8086');
+          def_system_macro('CPU16');
+        end
+      else if target_info.cpu=cpu_riscv32 then
+        begin
+          def_system_macro('CPURISCV');
+          def_system_macro('CPURISCV32');
+          def_system_macro('CPU32');
+        end
+      else if target_info.cpu=cpu_riscv64 then
+        begin
+          def_system_macro('CPURISCV');
+          def_system_macro('CPURISCV64');
+          def_system_macro('CPU64');
+        end
+      else if target_info.cpu=cpu_xtensa then
+        begin
+          def_system_macro('CPUXTENSA');
+          def_system_macro('CPU32');
+        end
+      else if target_info.cpu=cpu_z80 then
+        begin
+          def_system_macro('CPUZ80');
+          def_system_macro('CPU16');
+        end
+      else if target_info.cpu=cpu_wasm32 then
+        begin
+          def_system_macro('CPUWASM');
+          def_system_macro('CPUWASM32');
+          def_system_macro('CPU32');
+        end
+      else if target_info.cpu=cpu_loongarch64 then
+        begin
+          def_system_macro('CPULOONGARCH');
+          def_system_macro('CPULOONGARCH64');
+          def_system_macro('CPU64');
+        end;
+
       {$if defined(cpu8bitalu)}
         def_system_macro('CPUINT8');
       {$elseif defined(cpu16bitalu)}
