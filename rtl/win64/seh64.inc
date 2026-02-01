@@ -294,15 +294,6 @@ procedure RtlUnwind(
   ReturnValue: Pointer);
   external 'kernel32.dll' name 'RtlUnwind';
 
-{ RtlRestoreContext: Restores execution context (registers) from CONTEXT record.
-  https://learn.microsoft.com/en-us/windows/win32/api/winnt/nf-winnt-rtlrestorecontext
-  ContextRecord: [in] PCONTEXT – context to restore
-  ExceptionRecord: [in, optional] PEXCEPTION_RECORD – if non-nil, raises exception after restore }
-procedure RtlRestoreContext(
-  var ContextRecord: TContext;
-  ExceptionRecord: PExceptionRecord);
-  external 'kernel32.dll' name 'RtlRestoreContext';
-
 
 { FPC specific stuff }
 {$ifdef SYSTEM_USE_WIN_SEH}
@@ -528,21 +519,23 @@ begin
 
   { Use the unwound context (TestException's frame state). It has correct LR
     (return address), FP, X19-X28. Only override PC to the target (landing pad
-    after try block). Zeroing LR/FP/X19 would crash on ret or callee-saved use.
-    
-    EXPERIMENT: Do NOT overwrite SP. Keep the unwound context's Sp as-is.
-    Hypothesis: EstablisherFrame (Caller-SP) is wrong for landing pad.
-    The unwound ctx.Sp might be closer to what the landing pad expects. }
+    after try block). Zeroing LR/FP/X19 would crash on ret or callee-saved use. }
   ContextSetIP(ctx, PtrUInt(target));
   {$ifdef FPC_DEBUG_WIN64_UNWIND}
   if IsConsole then
   begin
     writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND] step 4: after ContextSetIP ctx.Pc=$',hexstr(ctx.Pc,16));
-    writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND] step 5: KEEPING original ctx.Sp=$',hexstr(ctx.Sp,16),' (NOT setting to EstablisherFrame=$',hexstr(EstablisherFrame,16),')');
     Flush(stderr);
   end;
   {$endif FPC_DEBUG_WIN64_UNWIND}
-  { REMOVED: ctx.Sp := EstablisherFrame; - keeping unwound ctx.Sp }
+  ctx.Sp := EstablisherFrame;  { Ensure SP matches the frame we're restoring to }
+  {$ifdef FPC_DEBUG_WIN64_UNWIND}
+  if IsConsole then
+  begin
+    writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND] step 5: after set Sp ctx.Sp=$',hexstr(ctx.Sp,16));
+    Flush(stderr);
+  end;
+  {$endif FPC_DEBUG_WIN64_UNWIND}
   { RtlRestoreContext restores only the portions indicated by ContextFlags. Go runtime:
     LR and callee-saved regs are not restored unless CONTEXT_INTEGER is set. Ensure
     full user context (CONTROL + INTEGER + FLOATING_POINT + ARM64) so PC, SP, LR, Fp,
@@ -558,23 +551,22 @@ begin
   end;
   {$endif FPC_DEBUG_WIN64_UNWIND}
 
-  { AI experiment #2 (bypass): Call RtlRestoreContext directly instead of
-    RtlUnwindEx. This skips the OS unwind loop and tests whether our context
-    setup is correct. If this works, bug is in RtlUnwindEx; if it crashes,
-    bug is in our context setup.
-    WARNING: This skips finally handlers! Only for diagnosis. }
+  FillChar(UnwindHistory, sizeof(UnwindHistory), 0);
+  UnwindHistory.Unwind := 1;
+  { Use compiler-provided frame (same as x86_64) rather than EstablisherFrame.
+    The compiler passes the try-block's frame pointer; EstablisherFrame from
+    RtlVirtualUnwind is the Caller-SP of _fpc_local_unwind, which is wrong. }
   {$ifdef FPC_DEBUG_WIN64_UNWIND}
   if IsConsole then
   begin
-    writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND] step 7: BYPASS - about to call RtlRestoreContext (skipping RtlUnwindEx)');
+    writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND] step 7: about to call RtlUnwindEx frame=$',hexstr(PtrUInt(frame),16),' target=$',hexstr(PtrUInt(target),16));
     writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND]   ctx: Pc=$',hexstr(ctx.Pc,16),' Sp=$',hexstr(ctx.Sp,16),
       ' Fp=$',hexstr(ctx.Fp,16),' Lr=$',hexstr(ctx.Lr,16));
     writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND]   ctx: X19=$',hexstr(ctx.X19,16),' Cpsr=$',hexstr(ctx.Cpsr,8));
-    writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND]   (for reference: compiler frame=$',hexstr(PtrUInt(frame),16),')');
     Flush(stderr);  { critical: flush before we never return }
   end;
   {$endif FPC_DEBUG_WIN64_UNWIND}
-  RtlRestoreContext(ctx, nil);
+  RtlUnwindEx(frame, target, nil, nil, @ctx, @UnwindHistory);
 {$else}
   RtlUnwindEx(frame, target, nil, nil, @ctx, nil);
 {$endif CPUAARCH64}
