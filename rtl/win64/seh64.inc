@@ -779,6 +779,37 @@ begin
   else
   begin
     TargetRva:=dispatch.TargetIp-dispatch.ImageBase;
+    { When EXCEPTION_TARGET_UNWIND is set, we are the handler for the target frame.
+      Patch context so RtlRestoreContext restores LR and callee-saved regs on ARM64.
+      Do this first: the landing pad is often *after* the try-finally scope (RvaEnd
+      is end of try/finally block), so (TargetRva in scope) is false and we would
+      never hit the patch inside the scope loop. }
+{$ifdef CPUAARCH64}
+    if (rec.ExceptionFlags and EXCEPTION_TARGET_UNWIND)<>0 then
+    begin
+      {$ifdef FPC_DEBUG_WIN64_UNWIND}
+      if IsConsole and (dispatch.ContextRecord<>nil) then
+      begin
+        writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND] TARGET_UNWIND: before patch ContextFlags=$',hexstr(dispatch.ContextRecord^.ContextFlags,8),
+          ' Lr=$',hexstr(dispatch.ContextRecord^.Lr,16),' Sp=$',hexstr(dispatch.ContextRecord^.Sp,16),' Fp=$',hexstr(dispatch.ContextRecord^.Fp,16));
+        Flush(stderr);
+      end;
+      {$endif FPC_DEBUG_WIN64_UNWIND}
+      context.ContextFlags := context.ContextFlags and not CONTEXT_UNWOUND_TO_CALL;
+      context.ContextFlags := context.ContextFlags and not CONTEXT_DEBUG_REGISTERS_ARM64;
+      context.ContextFlags := context.ContextFlags or CONTEXT_ARM64 or CONTEXT_CONTROL_ARM64 or CONTEXT_INTEGER_ARM64;
+      if dispatch.ContextRecord<>nil then
+        dispatch.ContextRecord^.ContextFlags := context.ContextFlags;
+      {$ifdef FPC_DEBUG_WIN64_UNWIND}
+      if IsConsole and (dispatch.ContextRecord<>nil) then
+      begin
+        writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND] TARGET_UNWIND: after patch ContextFlags=$',hexstr(dispatch.ContextRecord^.ContextFlags,8));
+        Flush(stderr);
+      end;
+      {$endif FPC_DEBUG_WIN64_UNWIND}
+      Exit;
+    end;
+{$endif CPUAARCH64}
 {$ifdef DEBUG_SEH}
     if IsConsole then
       writeln(stderr,'Unwind, TargetRva=',hexstr(TargetRva,8),' CtrlRva=',hexstr(ControlRva,8),' idx=',ScopeIdx);
@@ -794,38 +825,7 @@ begin
       begin
         if (TargetRva>=scope^.RvaStart) and (TargetRva<scope^.RvaEnd) and
           ((rec.ExceptionFlags and EXCEPTION_TARGET_UNWIND)<>0) then
-        begin
-          { ARM64: RtlUnwindEx overwrites our _fpc_local_unwind context at entry; the
-            context that gets RtlRestoreContext'd is the one the OS built. On Windows 10
-            LR and callee-saved regs are not restored unless CONTEXT_INTEGER is set (Go
-            runtime). Force flags so RtlRestoreContext restores PC, SP, LR, FP, X19-X28.
-            Also patch via dispatch.ContextRecord so we modify the same buffer the OS uses. }
-{$ifdef CPUAARCH64}
-          {$ifdef FPC_DEBUG_WIN64_UNWIND}
-          if IsConsole and (dispatch.ContextRecord<>nil) then
-          begin
-            writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND] TARGET_UNWIND: before patch ContextFlags=$',hexstr(dispatch.ContextRecord^.ContextFlags,8),
-              ' Lr=$',hexstr(dispatch.ContextRecord^.Lr,16),' Sp=$',hexstr(dispatch.ContextRecord^.Sp,16),' Fp=$',hexstr(dispatch.ContextRecord^.Fp,16));
-            Flush(stderr);
-          end;
-          {$endif FPC_DEBUG_WIN64_UNWIND}
-          context.ContextFlags := context.ContextFlags and not CONTEXT_UNWOUND_TO_CALL;
-          context.ContextFlags := context.ContextFlags and not CONTEXT_DEBUG_REGISTERS_ARM64;
-          context.ContextFlags := context.ContextFlags or CONTEXT_ARM64 or CONTEXT_CONTROL_ARM64 or CONTEXT_INTEGER_ARM64;
-          if dispatch.ContextRecord<>nil then
-          begin
-            dispatch.ContextRecord^.ContextFlags := context.ContextFlags;
-          end;
-          {$ifdef FPC_DEBUG_WIN64_UNWIND}
-          if IsConsole and (dispatch.ContextRecord<>nil) then
-          begin
-            writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND] TARGET_UNWIND: after patch ContextFlags=$',hexstr(dispatch.ContextRecord^.ContextFlags,8));
-            Flush(stderr);
-          end;
-          {$endif FPC_DEBUG_WIN64_UNWIND}
-{$endif CPUAARCH64}
           Exit;
-        end;
 
         dispatch.ScopeIndex:=ScopeIdx+1;
 {$ifdef DEBUG_SEH}
