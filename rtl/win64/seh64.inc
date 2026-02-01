@@ -448,6 +448,11 @@ begin
     ctx.ContextFlags := ctx.ContextFlags or CONTEXT_UNWOUND_TO_CALL;
   end;
   FrameToUse := Pointer(EstablisherFrame);
+  { Set continuation PC in context so the OS restores to TargetIp in the target frame.
+    After one unwind ctx describes TestException's frame; without this the context
+    has PC = return address after the call — the OS may or may not overwrite with
+    TargetIp on ARM64, so set it explicitly. }
+  ContextSetIP(ctx, PtrUInt(target));
   {$ifdef FPC_DEBUG_WIN64_UNWIND}
   if IsConsole then
     writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND] ARM64: using EstablisherFrame=$',hexstr(EstablisherFrame,16),' (Caller-SP)');
