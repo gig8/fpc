@@ -13,9 +13,9 @@ name: Windows arm64
 
 on:
   push:
-    branches: [ develop, feature/win-aarch64, main ]
+    branches: [ develop, feature/win-aarch64*, main ]
   pull_request:
-    branches: [ develop, feature/win-aarch64, main ]
+    branches: [ develop, feature/win-aarch64*, main ]
   workflow_dispatch:  # Run manually from Actions tab → "Windows arm64" → "Run workflow"
 
 env:
