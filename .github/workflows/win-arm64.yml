@@ -13,6 +13,7 @@ name: Windows arm64
 
 on:
   push:
+    # feature/win-aarch64* matches feature/win-aarch64, feature/win-aarch64-opus45, feature/win-aarch64-gpt52, etc.
     branches: [ develop, feature/win-aarch64*, main ]
   pull_request:
     branches: [ develop, feature/win-aarch64*, main ]
