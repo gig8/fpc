@@ -93,9 +93,27 @@ def parse_disassembly(lines):
             addr_to_inst[addr] = inst
             if "bl" in inst and DEED_SYMBOL.search(inst):
                 deed_addrs.add(addr)
+            elif "bl" in inst:
+                # bl to numeric addr - check if target is _FPC_local_unwind
+                bm = re.search(r"\bbl\s+(?:0x)?([0-9a-fA-F]+)", inst, re.I)
+                if bm:
+                    target = int(bm.group(1), 16)
+                    if "local_unwind" in labels.get(target, "").lower():
+                        deed_addrs.add(addr)
             i += 1
             continue
         i += 1
+
+    # Second pass: symbol might be defined after we parse - check symbol_to_addr
+    if not deed_addrs and symbol_to_addr:
+        unwind_addrs = {a for s, a in symbol_to_addr.items() if "local_unwind" in s.lower()}
+        for a, inst in addr_to_inst.items():
+            if "bl" not in inst:
+                continue
+            bm = re.search(r"\bbl\s+(?:0x)?([0-9a-fA-F]+)", inst, re.I)
+            if bm and int(bm.group(1), 16) in unwind_addrs:
+                deed_addrs.add(a)
+                break
 
     return addrs, addr_to_inst, labels, symbol_to_addr, deed_addrs
 

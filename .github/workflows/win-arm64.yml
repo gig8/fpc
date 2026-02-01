@@ -321,7 +321,7 @@ jobs:
           for exe in arm64trap arm64trap_no_fix; do
             if [ ! -f "$D/${exe}.exe" ]; then continue; fi
             echo "::group::Disassembly: ${exe}.exe"
-            "$OBJDUMP" -d "$D/${exe}.exe" > "$STAGE/${exe}_disasm.txt" 2>/dev/null || true
+            "$OBJDUMP" -d -C "$D/${exe}.exe" > "$STAGE/${exe}_disasm.txt" 2>/dev/null || true
             head -200 "$STAGE/${exe}_disasm.txt" || true
             echo "::endgroup::"
             if [ "$OBJDUMP" = "llvm-objdump" ]; then
@@ -358,6 +358,10 @@ jobs:
           if [ -f "$disasm" ]; then
             echo "::group::Unwind target (arm64trap)"
             python3 "$D/extract_unwind_target.py" --disasm "$disasm" 2>&1 || true
+            if ! grep -q "bl _FPC_local_unwind\|bl.*local_unwind" "$disasm" 2>/dev/null; then
+              echo "Diagnostic: grep 'bl\|unwind' (first 15):"
+              grep -E "\bbl\b|unwind" "$disasm" 2>/dev/null | head -15 || true
+            fi
             echo "Compare 'resolved target' above with runtime 'target=\$...' from FPC_DEBUG_WIN64_UNWIND."
             echo "::endgroup::"
           fi

@@ -20,9 +20,11 @@ import sys
 import os
 
 DEED_SYMBOL = re.compile(r"_FPC_local_unwind|_FPC_LOCAL_UNWIND", re.I)
-# Instruction patterns
+# Instruction patterns - objdump may use varying formats (GNU vs LLVM, 0x prefix or not)
 ADDR_RE = re.compile(r"^\s*([0-9a-fA-F]+)\s*:\s*")
 LABEL_RE = re.compile(r"^\s*([0-9a-fA-F]+)\s+<([^>]+)>\s*:\s*$")
+# bl to _FPC_local_unwind - symbol may be in <sym> or absent (LLVM often omits)
+BL_DEED_RE = re.compile(r"\bbl\s+.*?(?:local_unwind|LOCAL_UNWIND)", re.I)
 # adrp x1, 0x12345678  or  adrp x1, imm
 ADRP_RE = re.compile(r"\badrp\s+x1\s*,\s*(?:0x)?([0-9a-fA-F]+)", re.I)
 # add x1, x1, #0x5c  or  add x1, x1, #imm
@@ -35,9 +37,10 @@ ADD_ANY = re.compile(r"\badd\s+x1\s*,\s*x([0-9]+)\s*,\s*#(?:0x)?([0-9a-fA-F]+)",
 
 
 def parse_disasm(lines):
-    """Parse disasm. Return (addr_to_inst, labels, bl_addr)."""
+    """Parse disasm. Return (addr_to_inst, labels, bl_addr, symbol_to_addr)."""
     addr_to_inst = {}
     labels = {}
+    symbol_to_addr = {}
     bl_addr = None
 
     i = 0
@@ -46,24 +49,53 @@ def parse_disasm(lines):
         m = LABEL_RE.match(line)
         if m:
             addr = int(m.group(1), 16)
-            labels[addr] = m.group(2).strip()
+            sym = m.group(2).strip()
+            labels[addr] = sym
+            symbol_to_addr[sym] = addr
             i += 1
             continue
         m = ADDR_RE.match(line)
         if m:
             addr = int(m.group(1), 16)
             rest = line[m.end():].strip()
+            # Keep full line for matching - objdump may put symbol in angle brackets
+            full_inst = rest
             parts = rest.split()
             inst_parts = [p for p in parts if not re.match(r"^[0-9a-fA-F]{8}$", p)]
             inst = " ".join(inst_parts) if inst_parts else rest
             addr_to_inst[addr] = inst
-            if "bl" in inst and DEED_SYMBOL.search(inst):
-                bl_addr = addr
+            # Match: (a) symbol in line, or (b) bl with numeric target to _FPC_local_unwind addr
+            if "bl" in inst:
+                if DEED_SYMBOL.search(inst) or BL_DEED_RE.search(full_inst):
+                    bl_addr = addr
+                else:
+                    # bl to numeric addr - check if target is _FPC_local_unwind
+                    bm = re.search(r"\bbl\s+(?:0x)?([0-9a-fA-F]+)", inst, re.I)
+                    if bm:
+                        target = int(bm.group(1), 16)
+                        if "local_unwind" in labels.get(target, "").lower():
+                            bl_addr = addr
+                        # Also check symbol_to_addr for FPC_local_unwind
+                        for sym, a in symbol_to_addr.items():
+                            if "local_unwind" in sym.lower() and a == target:
+                                bl_addr = addr
+                                break
             i += 1
             continue
         i += 1
 
-    return addr_to_inst, labels, bl_addr
+    # Second pass: if no deed yet, find bl whose target addr has local_unwind label
+    if bl_addr is None and symbol_to_addr:
+        unwind_addrs = {a for s, a in symbol_to_addr.items() if "local_unwind" in s.lower()}
+        for a, inst in addr_to_inst.items():
+            if "bl" not in inst:
+                continue
+            bm = re.search(r"\bbl\s+(?:0x)?([0-9a-fA-F]+)", inst, re.I)
+            if bm and int(bm.group(1), 16) in unwind_addrs:
+                bl_addr = a
+                break
+
+    return addr_to_inst, labels, bl_addr, symbol_to_addr
 
 
 def extract_target(addr_to_inst, labels, bl_addr):
@@ -123,7 +155,7 @@ def main():
     with open(args.disasm, "r") as f:
         lines = f.read().splitlines()
 
-    addr_to_inst, labels, bl_addr = parse_disasm(lines)
+    addr_to_inst, labels, bl_addr, _ = parse_disasm(lines)
     if bl_addr is None:
         print("UNWIND_TARGET: no bl _FPC_local_unwind found")
         sys.exit(0)
