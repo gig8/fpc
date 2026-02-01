@@ -168,6 +168,77 @@ When PowerShell runs `.\ppca64.exe -iV` and ppca64 raises EExternalException on 
 
 ---
 
+## Local workflow: compile, trace, insert debugging (no Windows needed)
+
+Use this on Linux/WSL to compile, walk assembly, and trace the exit path without running on Windows ARM64.
+
+### 1. Compile with assembly output
+
+```bash
+cd docs/phase2-tests
+export PATH=/opt/llvm-mingw/bin:$PATH
+PPC=/path/to/ppcrossa64
+UP=/path/to/fpc_install/lib/fpc/3.3.1/units/aarch64-win64
+
+"$PPC" -Twin64 -XPaarch64-w64-mingw32- -Fu"$UP/rtl" -Fu"$UP/rtl-objpas" -FE. -FD/opt/llvm-mingw/bin -a -oarm64trap.exe arm64trap.pas
+```
+
+This produces `arm64trap.s` (assembly) and `arm64trap.exe` (binary for Windows ARM64).
+
+### 2. Trace the exit path
+
+```bash
+python3 trace_exit_path.py arm64trap.s
+# Or save to file:
+python3 trace_exit_path.py arm64trap.s -o exit_path.txt
+```
+
+This annotates the path from `bl _FPC_local_unwind` → `.Lj3` epilogue → `ret` → main's continuation (writeln Back in main., Flush, writeln Done.). The failure is somewhere on this path.
+
+### 3. Inspect unwind info
+
+```bash
+llvm-objdump -u arm64trap.exe   # May not support ARM64 on some llvm-objdump
+# Or grep the .s for .pdata/.xdata:
+grep -A 15 "xdata_P\$ARM64TRAP" arm64trap.s
+```
+
+The `.s` file contains `.pdata` and `.xdata` sections. Check that `P$ARM64TRAP_$$_TESTEXCEPTION` has `__FPC_specific_handler` and scope records (try start/end, finally handler). Missing or wrong unwind can cause crashes when RtlUnwindEx transfers to `.Lj3`.
+
+### 4. Insert diagnostic writelns (narrow the crash)
+
+Add `writeln('DEBUG: X')` at key points in `arm64trap.pas` to find exactly where the crash occurs:
+
+```pascal
+begin
+  TestException;
+  writeln('DEBUG: after TestException');   { if we see this, ret from TestException worked }
+  Flush(Output);
+  writeln('Back in main.');
+  Flush(Output);
+  writeln('DEBUG: before Done');           { if we see this, first Flush worked }
+  writeln('Done.');
+  Flush(Output);
+  writeln('DEBUG: after Done');            { if we see this, we completed }
+end.
+```
+
+Recompile, run on Windows ARM64 (or CI). The **last** DEBUG line printed shows where the crash happens. Then inspect the corresponding code in the trace.
+
+### 5. Compare fix vs no-fix assembly
+
+```bash
+# No-fix version
+"$PPC" -Twin64 -dFPC_NO_WIN64_LOCAL_UNWIND ... -a -oarm64trap_no_fix.exe arm64trap.pas
+
+# Diff the exit paths
+python3 trace_exit_path.py arm64trap.s -o fix_path.txt
+python3 trace_exit_path.py arm64trap_no_fix.s -o no_fix_path.txt 2>/dev/null || true
+diff -u no_fix_path.txt fix_path.txt
+```
+
+---
+
 ## Spinning up test versions
 
 1. **With fix (default):** `ppcrossa64 ... arm64trap.pas` → arm64trap.exe (calls _FPC_local_unwind).

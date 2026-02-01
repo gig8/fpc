@@ -2,6 +2,18 @@
 
 After the cross-build (Phase 1), use these to validate binaries and SEH.
 
+## Local workflow: trace exit path (no Windows needed)
+
+```bash
+# Compile with -a for assembly
+"$PPC" -Twin64 -XPaarch64-w64-mingw32- ... -a -oarm64trap.exe arm64trap.pas
+
+# Trace the exit path (deed → epilogue → main continuation)
+python3 trace_exit_path.py arm64trap.s
+```
+
+See **docs/debug-bounty-boss-and-ppca64.md** § "Local workflow" for the full flow.
+
 ## Prerequisites
 
 - `ppcrossa64` built (e.g. `/home/tim/Projects/gig8/fpc/compiler/ppcrossa64`)
