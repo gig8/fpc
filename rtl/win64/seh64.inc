@@ -423,7 +423,6 @@ var
   EstablisherFrame: QWord;
   ImageBase: QWord;
   FrameToUse: Pointer;
-  i: Longint;
 {$endif CPUAARCH64}
 begin
   {$ifdef FPC_DEBUG_WIN64_UNWIND}
@@ -435,20 +434,18 @@ begin
   FillChar(UnwindHistory, sizeof(UnwindHistory), 0);
   UnwindHistory.Unwind := 1;
   RtlCaptureContext(ctx);
-  { Unwind twice: from _fpc_local_unwind to caller (the frame with try/finally),
-    then from that frame to get its EstablisherFrame. }
-  for i := 1 to 2 do
+  { Unwind once: from _fpc_local_unwind to caller (the frame with try/finally).
+    Use that frame's EstablisherFrame so RtlUnwindEx unwinds to it (runs finally)
+    then continues at TargetIp in that same frame. Two unwinds would target main's
+    frame while TargetIp is in TestException — wrong. }
+  RuntimeFunction := RtlLookupFunctionEntry(ContextGetIP(ctx), ImageBase, @UnwindHistory);
+  if Assigned(RuntimeFunction) then
+    RtlVirtualUnwind(UNW_FLAG_NHANDLER, ImageBase, ContextGetIP(ctx),
+      RuntimeFunction, ctx, @HandlerData, @EstablisherFrame, nil)
+  else
   begin
-    RuntimeFunction := RtlLookupFunctionEntry(ContextGetIP(ctx), ImageBase, @UnwindHistory);
-    if Assigned(RuntimeFunction) then
-      RtlVirtualUnwind(UNW_FLAG_NHANDLER, ImageBase, ContextGetIP(ctx),
-        RuntimeFunction, ctx, @HandlerData, @EstablisherFrame, nil)
-    else
-    begin
-      { Leaf function: return address is in LR. }
-      ctx.Pc := ctx.Lr;
-      ctx.ContextFlags := ctx.ContextFlags or CONTEXT_UNWOUND_TO_CALL;
-    end;
+    ctx.Pc := ctx.Lr;
+    ctx.ContextFlags := ctx.ContextFlags or CONTEXT_UNWOUND_TO_CALL;
   end;
   FrameToUse := Pointer(EstablisherFrame);
   {$ifdef FPC_DEBUG_WIN64_UNWIND}

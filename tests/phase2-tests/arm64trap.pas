@@ -15,6 +15,7 @@ begin
   finally
     writeln('Success: Finally block executed!');
   end;
+  writeln('DEBUG: After finally block in TestException');  { if missing, crash at RtlUnwindEx transfer or first instr after try }
 end;
 
 begin

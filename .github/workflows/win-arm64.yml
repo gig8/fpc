@@ -529,7 +529,7 @@ jobs:
           $ok = $false
           if ($out -match 'Success: Finally block executed!') {
             if ($out -notmatch 'Done\.') {
-              Write-Host "Warning: 'Done.' not in output (exit-path crash). Check DEBUG lines: if 'DEBUG: Back in main' missing, crash on return from TestException; if 'DEBUG: After Flush' missing, crash in Flush."
+              Write-Host "Warning: 'Done.' not in output (exit-path crash). Check DEBUG: 'After finally block in TestException' = transfer/epilogue; 'Back in main' = return from TestException; 'After Flush' = in Flush."
             } else {
               Write-Host "Bounty Boss (fix): passed (finally + Done.)."
               $ok = $true
@@ -565,7 +565,7 @@ jobs:
           $boss = "${{ steps.bounty_boss.outputs.bounty_boss_ok }}"
           Write-Host "Bounty Boss (fix) ok: $boss"
           if ($boss -ne 'true') {
-            Write-Error "Bounty Boss (fix) failed: expected 'Success: Finally block executed!' and 'Done.' in output. See logs above and DEBUG lines to narrow crash."
+            Write-Error "Bounty Boss (fix) failed: expected 'Success: Finally block executed!' and 'Done.' in output. See logs and DEBUG lines (After finally block / Back in main / After Flush) to narrow crash."
             exit 1
           }
           Write-Host "Bounty Boss (fix) passed."
