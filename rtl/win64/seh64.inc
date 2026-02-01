@@ -294,6 +294,15 @@ procedure RtlUnwind(
   ReturnValue: Pointer);
   external 'kernel32.dll' name 'RtlUnwind';
 
+{ RtlRestoreContext: Restores execution context (registers) from CONTEXT record.
+  https://learn.microsoft.com/en-us/windows/win32/api/winnt/nf-winnt-rtlrestorecontext
+  ContextRecord: [in] PCONTEXT – context to restore
+  ExceptionRecord: [in, optional] PEXCEPTION_RECORD – if non-nil, raises exception after restore }
+procedure RtlRestoreContext(
+  var ContextRecord: TContext;
+  ExceptionRecord: PExceptionRecord);
+  external 'kernel32.dll' name 'RtlRestoreContext';
+
 
 { FPC specific stuff }
 {$ifdef SYSTEM_USE_WIN_SEH}
