@@ -424,16 +424,17 @@ var
   ctx: TContext;
 {$ifdef CPUAARCH64}
   { On ARM64 Windows, EstablisherFrame = Caller-SP (SP just before the call).
-    The compiler passes current SP; the unwinder expects Caller-SP.
 
-    .NET's ClrUnwindEx uses RtlUnwind (4-arg), not RtlUnwindEx (6-arg).
-    RtlUnwind lets the OS manage the context internally - simpler and matches
-    what .NET does. We only need to compute the correct EstablisherFrame.
+    Match longjmp pattern: use RtlUnwindEx (6-arg) with explicit context.
+    longjmp saves context at setjmp time; we capture and unwind once.
 
-    EstablisherFrame of TestException = Caller-SP of TestException = main's SP.
-    We need TWO unwinds to get there:
-    (1) _fpc_local_unwind -> TestException gives TestException's context
-    (2) TestException -> main gives EstablisherFrame = main's SP }
+    After one RtlVirtualUnwind from _fpc_local_unwind:
+    - ctx describes TestException's frame
+    - EstablisherFrame = _fpc_local_unwind's Caller-SP = TestException's SP
+      at the point where it called _fpc_local_unwind
+
+    We pass this EstablisherFrame as TargetFrame, and ctx (with PC set to
+    target) as ContextRecord. This matches longjmp's approach. }
   UnwindHistory: UNWIND_HISTORY_TABLE;
   RuntimeFunction: PRUNTIME_FUNCTION;
   HandlerData: Pointer;
@@ -447,51 +448,51 @@ begin
     writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND] _fpc_local_unwind ENTER frame=$',hexstr(PtrUInt(frame),16),' target=$',hexstr(PtrUInt(target),16));
   {$endif FPC_DEBUG_WIN64_UNWIND}
 {$ifdef CPUAARCH64}
-  FrameToUse := frame;
   FillChar(UnwindHistory, sizeof(UnwindHistory), 0);
   UnwindHistory.Unwind := 1;
   RtlCaptureContext(ctx);
 
-  { First unwind: _fpc_local_unwind -> TestException (caller).
-    After this, ctx describes TestException's frame. }
+  { Single unwind: _fpc_local_unwind -> TestException (caller).
+    After this, ctx describes TestException's frame, and EstablisherFrame
+    is the Caller-SP of _fpc_local_unwind = TestException's SP at call point. }
   RuntimeFunction := RtlLookupFunctionEntry(ContextGetIP(ctx), ImageBase, @UnwindHistory);
   if Assigned(RuntimeFunction) then
     RtlVirtualUnwind(UNW_FLAG_NHANDLER, ImageBase, ContextGetIP(ctx),
       RuntimeFunction, ctx, @HandlerData, @EstablisherFrame, nil)
   else
+  begin
     ctx.Pc := ctx.Lr;
-  {$ifdef FPC_DEBUG_WIN64_UNWIND}
-  if IsConsole then
-    writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND] ARM64: after 1st unwind, ctx.Pc=$',hexstr(ctx.Pc,16),' ctx.Sp=$',hexstr(ctx.Sp,16));
-  {$endif FPC_DEBUG_WIN64_UNWIND}
-
-  { Second unwind: TestException -> main (its caller).
-    We only need EstablisherFrame from this. }
-  RuntimeFunction := RtlLookupFunctionEntry(ContextGetIP(ctx), ImageBase, @UnwindHistory);
-  if Assigned(RuntimeFunction) then
-    RtlVirtualUnwind(UNW_FLAG_NHANDLER, ImageBase, ContextGetIP(ctx),
-      RuntimeFunction, ctx, @HandlerData, @EstablisherFrame, nil)
-  else
-    ctx.Pc := ctx.Lr;
+    EstablisherFrame := ctx.Sp;
+  end;
   FrameToUse := Pointer(EstablisherFrame);
   {$ifdef FPC_DEBUG_WIN64_UNWIND}
   if IsConsole then
-    writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND] ARM64: after 2nd unwind, EstablisherFrame=$',hexstr(EstablisherFrame,16),' (TestException Caller-SP = main SP)');
+    writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND] ARM64: after 1st unwind, ctx.Pc=$',hexstr(ctx.Pc,16),
+      ' ctx.Sp=$',hexstr(ctx.Sp,16),' EstablisherFrame=$',hexstr(EstablisherFrame,16));
   {$endif FPC_DEBUG_WIN64_UNWIND}
 
-  { Use RtlUnwind (4-arg) like .NET's ClrUnwindEx does. The OS manages the
-    context internally - we don't need to build/pass a ContextRecord. }
+  { Set target PC and clear flags that might confuse the OS. }
+  ContextSetIP(ctx, PtrUInt(target));
+  ctx.ContextFlags := ctx.ContextFlags and not CONTEXT_UNWOUND_TO_CALL;
+  { Clear debug registers flag like .NET does. }
+  ctx.ContextFlags := ctx.ContextFlags and not $00100000;  { CONTEXT_DEBUG_REGISTERS }
+  ctx.ContextFlags := ctx.ContextFlags or $00400000;       { Keep CONTEXT_ARM64 }
+
+  FillChar(UnwindHistory, sizeof(UnwindHistory), 0);
+  UnwindHistory.Unwind := 1;
   {$ifdef FPC_DEBUG_WIN64_UNWIND}
   if IsConsole then
-    writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND] ARM64: calling RtlUnwind(FrameToUse=$',hexstr(PtrUInt(FrameToUse),16),', target=$',hexstr(PtrUInt(target),16),')');
+    writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND] ARM64: calling RtlUnwindEx(FrameToUse=$',hexstr(PtrUInt(FrameToUse),16),
+      ', target=$',hexstr(PtrUInt(target),16),') ctx: Pc=$',hexstr(ctx.Pc,16),' Sp=$',hexstr(ctx.Sp,16),
+      ' Fp=$',hexstr(ctx.Fp,16),' Lr=$',hexstr(ctx.Lr,16));
   {$endif FPC_DEBUG_WIN64_UNWIND}
-  RtlUnwind(FrameToUse, target, nil, nil);
+  RtlUnwindEx(FrameToUse, target, nil, nil, @ctx, @UnwindHistory);
 {$else}
   RtlUnwindEx(frame, target, nil, nil, @ctx, nil);
 {$endif CPUAARCH64}
   {$ifdef FPC_DEBUG_WIN64_UNWIND}
   if IsConsole then
-    writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND] _fpc_local_unwind EXIT (returned from RtlUnwind)');
+    writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND] _fpc_local_unwind EXIT (returned from RtlUnwindEx)');
   {$endif FPC_DEBUG_WIN64_UNWIND}
 end;
 {$pop}
