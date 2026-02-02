@@ -679,7 +679,7 @@ jobs:
         shell: pwsh
 
       # ppca64 (Phase 3 native compiler) – test on Windows ARM64.
-      # Run with timeout; capture output for diagnostics (may crash, loop, or succeed).
+      # Run with timeout; capture output for diagnostics. Step fails on timeout, non-zero exit, or EExternalException.
       - name: Run ppca64.exe -iV (native ARM64 compiler test)
         id: ppca64_test
         run: |
@@ -696,11 +696,14 @@ jobs:
           Write-Host "=== ppca64.exe -iV (with 30s timeout) ==="
           Write-Host "Exe: $exe"
           $outFile = "$env:GITHUB_WORKSPACE/ppca64_output.txt"
+          $timedOut = $false
+          $exitCode = 0
           try {
             $proc = Start-Process -FilePath $exe -ArgumentList "-iV" -NoNewWindow -PassThru -RedirectStandardOutput "$outFile.stdout" -RedirectStandardError "$outFile.stderr"
             $finished = $proc.WaitForExit(30000)  # 30 second timeout
             if (-not $finished) {
-              Write-Host "::warning::ppca64.exe -iV timed out after 30s (killing process)"
+              $timedOut = $true
+              Write-Host "::error::ppca64.exe -iV timed out after 30s (killing process)"
               $proc.Kill()
               "TIMEOUT after 30s" | Out-File -Append $outFile
             }
@@ -708,15 +711,17 @@ jobs:
             Write-Host "Exit code: $exitCode"
             echo "ppca64_exitcode=$exitCode" >> $env:GITHUB_OUTPUT
           } catch {
-            Write-Host "::warning::Exception running ppca64.exe: $_"
+            Write-Host "::error::Exception running ppca64.exe: $_"
             "EXCEPTION: $_" | Out-File -Append $outFile
             echo "ppca64_exitcode=-1" >> $env:GITHUB_OUTPUT
+            $exitCode = -1
           }
           # Combine stdout and stderr
           if (Test-Path "$outFile.stdout") { Get-Content "$outFile.stdout" | Out-File -Append $outFile }
           if (Test-Path "$outFile.stderr") { Get-Content "$outFile.stderr" | Out-File -Append $outFile }
           # Show output
           Write-Host "=== ppca64.exe output ==="
+          $out = ""
           if (Test-Path $outFile) {
             $out = Get-Content $outFile -Raw
             Write-Host $out
@@ -732,7 +737,14 @@ jobs:
             Write-Host "No output captured"
             echo "ppca64_version=false" >> $env:GITHUB_OUTPUT
           }
-          # Don't fail the step - we want to see what happens
+          # Fail on timeout, non-zero exit, or EExternalException (known unwind/shutdown bug)
+          $fail = $timedOut -or ($exitCode -ne 0) -or ($out -match 'EExternalException')
+          if ($fail) {
+            if ($timedOut) { Write-Host "::error::ppca64 -iV: timed out (loop/crash)" }
+            elseif ($out -match 'EExternalException') { Write-Host "::error::ppca64 -iV: EExternalException on exit (unwind/shutdown bug)" }
+            else { Write-Host "::error::ppca64 -iV: exit code $exitCode" }
+            exit 1
+          }
           exit 0
         shell: pwsh
 
