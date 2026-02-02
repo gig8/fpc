@@ -1493,6 +1493,13 @@ const pemagic : array[0..3] of byte = (
                   end;
                 RELOC_ADR_PREL_PG_HI21:
                   begin
+                    { Debug output to trace ADRP relocation computation - TEMPORARY }
+                    if assigned(objreloc.symbol) and (pos('.Lj',objreloc.symbol.name)>0) then
+                      writeln(stderr,'[ADRP_RELOC] symbol=',objreloc.symbol.name,
+                        ' sym_addr=$',hexstr(relocval,16),
+                        ' sec_mempos=$',hexstr(objsec.mempos,16),
+                        ' dataoffset=$',hexstr(objreloc.dataoffset,16),
+                        ' instr_addr=$',hexstr(objsec.mempos+objreloc.dataoffset,16));
                     addend:=((address shr 29) and $3) or (((address shr 5) and $7ffff) shl 2);
                     { sign extend the value if necessary. The addend is a 21-bit signed value,
                       so the sign bit is at position 20 (0-indexed). If set, extend to 64 bits. }
@@ -1500,6 +1507,9 @@ const pemagic : array[0..3] of byte = (
                       addend:=addend or (not ((int64(1) shl 21) - 1));
                     relocval:=relocval shr 12;
                     relocval:=int64((relocval-(objsec.mempos+objreloc.dataoffset) shr 12)+addend);
+                    if assigned(objreloc.symbol) and (pos('.Lj',objreloc.symbol.name)>0) then
+                      writeln(stderr,'[ADRP_RELOC] addend=$',hexstr(addend,16),
+                        ' page_diff=$',hexstr(relocval,16));
                     address:=address and not (($3 shl 29) or ($7ffff shl 5));
                     address:=address or ((relocval and $3) shl 29) or (((relocval shr 2) and $7ffff) shl 5);
                   end;
