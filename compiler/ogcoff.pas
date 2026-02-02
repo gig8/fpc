@@ -2423,18 +2423,6 @@ const pemagic : array[0..3] of byte = (
            end;
 
            p:=FSymTbl[rel.sym];
-{$ifdef aarch64}
-           { DEBUG: Show relocation symbol lookup for ARM64 page relocations }
-           if rel_type in [RELOC_ADR_PREL_PG_HI21, RELOC_ADD_ABS_LO12] then
-             begin
-               if assigned(p) then
-                 writeln(stderr,'[RELOC_READ] type=',ord(rel_type),' sym_idx=',rel.sym,
-                   ' sym_name=',p.name,' sym_offset=',hexstr(p.offset,8),
-                   ' data_addr=',hexstr(rel.address,8))
-               else
-                 writeln(stderr,'[RELOC_READ] type=',ord(rel_type),' sym_idx=',rel.sym,' NO SYMBOL');
-             end;
-{$endif aarch64}
            if assigned(p) then
              s.addsymreloc(rel.address-s.mempos,p,rel_type)
            else

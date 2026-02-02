@@ -86,7 +86,7 @@ jobs:
             OS_TARGET=win64 \
             FPC=/usr/bin/fpc \
             BINUTILSPREFIX=aarch64-w64-mingw32- \
-            CROSSOPT="-FD$RUNNER_TEMP/llvm-mingw/bin -dFPC_DEBUG_WIN64_UNWIND -dFPC_ARM64_UNWIND_BYPASS_RTLUNWINDEX" \
+            CROSSOPT="-FD$RUNNER_TEMP/llvm-mingw/bin -dFPC_DEBUG_WIN64_UNWIND" \
             INSTALL_PREFIX="$RUNNER_TEMP/fpc_install" \
             2>&1 | tee "$RUNNER_TEMP/crossinstall.log"
           exit "${PIPESTATUS[0]}"
