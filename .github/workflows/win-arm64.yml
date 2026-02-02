@@ -192,6 +192,11 @@ jobs:
             -Fu"$UP/rtl" -Fu"$UP/rtl-objpas" \
             -FE. -FD"$RUNNER_TEMP/llvm-mingw/bin" \
             -Xe -a -g -O- -oarm64trap_unopt.exe arm64trap.pas
+          # With internal linker (no -Xe) – test ADRP relocation fix in ogcoff.pas
+          "$PPC" -Twin64 -XPaarch64-w64-mingw32- \
+            -Fu"$UP/rtl" -Fu"$UP/rtl-objpas" \
+            -FE. -FD"$RUNNER_TEMP/llvm-mingw/bin" \
+            -a -g -oarm64trap_intlinker.exe arm64trap.pas
           cd "$GITHUB_WORKSPACE"
           if [ -f tests/phase2-tests/neontest.pas ]; then
             "$PPC" -Twin64 -XPaarch64-w64-mingw32- \
@@ -386,7 +391,7 @@ jobs:
           for f in hello trap; do
             if [ -f "$P2/${f}.exe" ]; then cp "$P2/${f}.exe" "$STAGE/"; else echo "Missing: tests/phase2-tests/${f}.exe"; exit 1; fi
           done
-          for exe in arm64trap arm64trap_no_fix arm64trap_unopt; do
+          for exe in arm64trap arm64trap_no_fix arm64trap_unopt arm64trap_intlinker; do
             if [ -f "$P2/${exe}.exe" ]; then
               cp "$P2/${exe}.exe" "$STAGE/"
             elif [ -f "$P2/${exe}" ]; then
@@ -397,7 +402,7 @@ jobs:
               exit 1
             fi
           done
-          for asm in arm64trap arm64trap_no_fix arm64trap_unopt; do
+          for asm in arm64trap arm64trap_no_fix arm64trap_unopt arm64trap_intlinker; do
             if [ -f "$P2/${asm}.s" ]; then
               cp "$P2/${asm}.s" "$STAGE/"
             else
@@ -636,6 +641,39 @@ jobs:
           }
           if ($out -match '\[VEH\] ExceptionCode=\$([0-9A-Fa-f]+) ExceptionAddress=\$([0-9A-Fa-f]+)') {
             Write-Host "::notice::Unoptimized VEH fault: ExceptionCode = $($Matches[1]), ExceptionAddress = $($Matches[2])"
+          }
+          exit 0
+        shell: pwsh
+
+      # Run internal linker build (test ADRP relocation fix in ogcoff.pas)
+      - name: Run Bounty Boss test – internal linker (arm64trap_intlinker.exe)
+        id: bounty_boss_intlinker
+        run: |
+          Set-Location $env:GITHUB_WORKSPACE
+          $root = if (Test-Path phase2-arm64-exes) { 'phase2-arm64-exes' } elseif (Test-Path arm64-exes) { 'arm64-exes' } else { '.' }
+          $dir = if (Test-Path (Join-Path $root 'arm64trap_intlinker.exe')) { $root } else { (Join-Path $root 'arm64-exes') }
+          Push-Location $dir
+          Write-Host "=== arm64trap_intlinker.exe (internal linker, with fix) ==="
+          $out = .\arm64trap_intlinker.exe 2>&1 | Out-String
+          Pop-Location
+          Write-Host $out
+          $out | Set-Content -Path "$env:GITHUB_WORKSPACE/arm64trap_intlinker_output.txt" -Encoding utf8
+          if ($out -match '\[FPC_DEBUG_WIN64_UNWIND\] step 0:') {
+            Write-Host "::notice::Internal linker: ARM64 unwind path verified (step 0 present)"
+          }
+          if ($out -match 'Success: Finally block executed!' -and $out -match 'Done\.') {
+            Write-Host "::notice::Internal linker: PASSED (finally + Done.) - ADRP relocation fix works!"
+          } elseif ($out -match '\[VEH\] ExceptionCode=\$([0-9A-Fa-f]+) ExceptionAddress=\$([0-9A-Fa-f]+)') {
+            Write-Host "::warning::Internal linker VEH fault: ExceptionCode = $($Matches[1]), ExceptionAddress = $($Matches[2])"
+          }
+          # Check target offset - if still far from caller, internal linker fix didn't help
+          if ($out -match '\[FPC_DEBUG_WIN64_UNWIND\] step 3.*target_offset=\$([0-9A-Fa-f]+)') {
+            $offset = [System.Convert]::ToInt64($Matches[1], 16)
+            if ($offset -gt 0x100000) {
+              Write-Host "::warning::Internal linker: target_offset=$($Matches[1]) (>1MB) - landing pad address still wrong!"
+            } else {
+              Write-Host "::notice::Internal linker: target_offset=$($Matches[1]) (<1MB) - landing pad address looks correct"
+            }
           }
           exit 0
         shell: pwsh
