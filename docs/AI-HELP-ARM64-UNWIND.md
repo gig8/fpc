@@ -72,6 +72,8 @@ Fix a **crash on ARM64 Windows** when `exit` (or break/continue) is used inside 
 2. **Experiment: use compiler’s `frame` as TargetFrame** — call RtlUnwindEx with no pre-unwind, only RtlCaptureContext + ContextFlags, and the compiler's `frame` (current SP) as first arg. If behavior changes, EstablisherFrame vs compiler frame matters. **Alternatively:** try having the compiler pass **x29 (FP)** instead of SP as the first argument to `_FPC_local_unwind` (hypothesis: unwinder may expect Caller-SP or FP for frame identity).
 3. **Minimal bypass of RtlUnwindEx:** RtlCaptureContext + RtlVirtualUnwind once, set PC/Sp, ContextFlags, then call **RtlRestoreContext** ourselves (no RtlUnwindEx). If that lands and runs correctly, the bug is inside RtlUnwindEx’s use/overwrite of context or its call to RtlRestoreContext.
 4. **On-device:** breakpoint at landing pad, inspect SP/FP/LR/x19 after “restore”; verify .pdata/.xdata for TestException and _fpc_local_unwind (e.g. `llvm-objdump -u arm64trap.exe`).
+5. **CI landing-pad disasm:** Workflow step "Disassemble landing pad (arm64trap)" runs `extract_unwind_target.py` on the full disasm; output is in artifact **arm64-exes/landing_pad_instructions.txt**. Compare "resolved target" with runtime "target=$..." from FPC_DEBUG_WIN64_UNWIND; the listed instructions are the landing pad (first one faults with correct Sp/Fp). See docs/AI-UNWIND-LEARNINGS-SUMMARY.md §5e.
+6. **Debug build:** arm64trap is compiled with **-g** (symbols in disasm); no -O- by default. Add -O- to compare unoptimized layout if needed.
 
 ---
 

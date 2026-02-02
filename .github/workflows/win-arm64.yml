@@ -175,16 +175,22 @@ jobs:
           # Bounty Boss: compile from P2 so .s is written there (fix and no-fix)
           P2="$GITHUB_WORKSPACE/tests/phase2-tests"
           cd "$P2"
-          # With fix (default) – emits call to _FPC_local_unwind
+          # With fix (default) – emits call to _FPC_local_unwind.
+          # -g: emit debug info so disasm has symbols (optional; does not change codegen).
           "$PPC" -Twin64 -XPaarch64-w64-mingw32- \
             -Fu"$UP/rtl" -Fu"$UP/rtl-objpas" \
             -FE. -FD"$RUNNER_TEMP/llvm-mingw/bin" \
-            -a -oarm64trap.exe arm64trap.pas
+            -a -g -oarm64trap.exe arm64trap.pas
           # Without fix – plain branch to finally
           "$PPC" -Twin64 -XPaarch64-w64-mingw32- -dFPC_NO_WIN64_LOCAL_UNWIND \
             -Fu"$UP/rtl" -Fu"$UP/rtl-objpas" \
             -FE. -FD"$RUNNER_TEMP/llvm-mingw/bin" \
             -a -oarm64trap_no_fix.exe arm64trap.pas
+          # Unoptimized (with fix) – compare landing-pad behaviour vs optimized
+          "$PPC" -Twin64 -XPaarch64-w64-mingw32- \
+            -Fu"$UP/rtl" -Fu"$UP/rtl-objpas" \
+            -FE. -FD"$RUNNER_TEMP/llvm-mingw/bin" \
+            -a -g -O- -oarm64trap_unopt.exe arm64trap.pas
           cd "$GITHUB_WORKSPACE"
           if [ -f tests/phase2-tests/neontest.pas ]; then
             "$PPC" -Twin64 -XPaarch64-w64-mingw32- \
@@ -287,7 +293,7 @@ jobs:
             exit 0
           fi
           mkdir -p "$STAGE"
-          for exe in arm64trap arm64trap_no_fix; do
+          for exe in arm64trap arm64trap_no_fix arm64trap_unopt; do
             if [ ! -f "$D/${exe}.exe" ]; then continue; fi
             echo "::group::Disassembly: ${exe}.exe"
             "$OBJDUMP" -d -C "$D/${exe}.exe" > "$STAGE/${exe}_disasm.txt" 2>/dev/null || true
@@ -310,7 +316,7 @@ jobs:
         run: |
           D="$GITHUB_WORKSPACE/tests/phase2-tests"
           STAGE="$GITHUB_WORKSPACE/arm64-exes"
-          for name in arm64trap arm64trap_no_fix; do
+          for name in arm64trap arm64trap_no_fix arm64trap_unopt; do
             disasm="$STAGE/${name}_disasm.txt"
             if [ ! -f "$disasm" ]; then continue; fi
             echo "::group::Walk $name"
@@ -318,21 +324,44 @@ jobs:
             echo "::endgroup::"
           done
 
-      # Extract target address passed to _FPC_local_unwind (compare with runtime target= from CI output).
-      - name: Extract unwind target from disasm (Bounty Boss)
+      # Extract target address and disassemble landing pad (first instructions after try/finally).
+      # Snippet is saved to arm64-exes/landing_pad_instructions.txt for artifact inspection.
+      - name: Disassemble landing pad (arm64trap) – Bounty Boss
         run: |
           D="$GITHUB_WORKSPACE/tests/phase2-tests"
           STAGE="$GITHUB_WORKSPACE/arm64-exes"
           disasm="$STAGE/arm64trap_disasm.txt"
-          if [ -f "$disasm" ]; then
-            echo "::group::Unwind target (arm64trap)"
+          out="$STAGE/landing_pad_instructions.txt"
+          if [ ! -f "$disasm" ]; then
+            echo "::warning::arm64trap_disasm.txt not found; landing-pad disasm skipped"
+            exit 0
+          fi
+          echo "::group::Landing pad (first instructions at unwind target)"
+          {
+            echo "Instructions at the unwind target (landing pad). Compare 'resolved target' with runtime 'target=\$...' from FPC_DEBUG_WIN64_UNWIND."
+            echo "Runtime VA = image base + RVA; objdump may show RVA or load address."
+            echo ""
             python3 "$D/extract_unwind_target.py" --disasm "$disasm" 2>&1 || true
             if ! grep -q "bl _FPC_local_unwind\|bl.*local_unwind" "$disasm" 2>/dev/null; then
-              echo "Diagnostic: grep 'bl\|unwind' (first 15):"
+              echo ""
+              echo "Diagnostic: grep 'bl|unwind' (first 15):"
               grep -E "\bbl\b|unwind" "$disasm" 2>/dev/null | head -15 || true
             fi
-            echo "Compare 'resolved target' above with runtime 'target=\$...' from FPC_DEBUG_WIN64_UNWIND."
+          } | tee "$out"
+          echo "::endgroup::"
+          echo "Landing-pad snippet saved to arm64-exes/landing_pad_instructions.txt (in artifact)."
+          # Unoptimized landing pad
+          disasm_unopt="$STAGE/arm64trap_unopt_disasm.txt"
+          out_unopt="$STAGE/landing_pad_unopt_instructions.txt"
+          if [ -f "$disasm_unopt" ]; then
+            echo "::group::Landing pad (unoptimized)"
+            {
+              echo "Unoptimized (-O-) build: instructions at unwind target."
+              echo ""
+              python3 "$D/extract_unwind_target.py" --disasm "$disasm_unopt" 2>&1 || true
+            } | tee "$out_unopt"
             echo "::endgroup::"
+            echo "Landing-pad unopt saved to arm64-exes/landing_pad_unopt_instructions.txt (in artifact)."
           fi
 
       - name: List expected exe locations (diagnostic)
@@ -356,7 +385,7 @@ jobs:
           for f in hello trap; do
             if [ -f "$P2/${f}.exe" ]; then cp "$P2/${f}.exe" "$STAGE/"; else echo "Missing: tests/phase2-tests/${f}.exe"; exit 1; fi
           done
-          for exe in arm64trap arm64trap_no_fix; do
+          for exe in arm64trap arm64trap_no_fix arm64trap_unopt; do
             if [ -f "$P2/${exe}.exe" ]; then
               cp "$P2/${exe}.exe" "$STAGE/"
             elif [ -f "$P2/${exe}" ]; then
@@ -367,7 +396,7 @@ jobs:
               exit 1
             fi
           done
-          for asm in arm64trap arm64trap_no_fix; do
+          for asm in arm64trap arm64trap_no_fix arm64trap_unopt; do
             if [ -f "$P2/${asm}.s" ]; then
               cp "$P2/${asm}.s" "$STAGE/"
             else
@@ -588,8 +617,63 @@ jobs:
           exit 0
         shell: pwsh
 
+      # Run unoptimized build (compare with optimized for landing-pad behaviour).
+      - name: Run Bounty Boss test – unoptimized (arm64trap_unopt.exe)
+        id: bounty_boss_unopt
+        run: |
+          Set-Location $env:GITHUB_WORKSPACE
+          $root = if (Test-Path phase2-arm64-exes) { 'phase2-arm64-exes' } elseif (Test-Path arm64-exes) { 'arm64-exes' } else { '.' }
+          $dir = if (Test-Path (Join-Path $root 'arm64trap_unopt.exe')) { $root } else { (Join-Path $root 'arm64-exes') }
+          Push-Location $dir
+          Write-Host "=== arm64trap_unopt.exe (-O-, with fix) ==="
+          $out = .\arm64trap_unopt.exe 2>&1 | Out-String
+          Pop-Location
+          Write-Host $out
+          $out | Set-Content -Path "$env:GITHUB_WORKSPACE/arm64trap_unopt_output.txt" -Encoding utf8
+          if ($out -match '\[FPC_DEBUG_WIN64_UNWIND\] step 0:') {
+            Write-Host "::notice::Unoptimized: ARM64 unwind path verified (step 0 present)"
+          }
+          if ($out -match '\[VEH\] ExceptionCode=\$([0-9A-Fa-f]+) ExceptionAddress=\$([0-9A-Fa-f]+)') {
+            Write-Host "::notice::Unoptimized VEH fault: ExceptionCode = $($Matches[1]), ExceptionAddress = $($Matches[2])"
+          }
+          exit 0
+        shell: pwsh
+
       # ppca64 (Phase 3 native compiler) – skipped for now: gets stuck when run on Windows ARM64.
       # We will come back to this; build/stage still happens in crossbuild job for future use.
+
+      # Two artifacts (optimized and unoptimized) for comparison; download and send to AI when done.
+      - name: Upload arm64trap optimized and unoptimized artifacts
+        run: |
+          Set-Location $env:GITHUB_WORKSPACE
+          $root = if (Test-Path phase2-arm64-exes) { 'phase2-arm64-exes' } elseif (Test-Path arm64-exes) { 'arm64-exes' } else { '.' }
+          New-Item -ItemType Directory -Force -Path arm64trap-optimized | Out-Null
+          New-Item -ItemType Directory -Force -Path arm64trap-unoptimized | Out-Null
+          if (Test-Path (Join-Path $root 'arm64trap.exe')) { Copy-Item (Join-Path $root 'arm64trap.exe') arm64trap-optimized\ }
+          if (Test-Path (Join-Path $root 'landing_pad_instructions.txt')) { Copy-Item (Join-Path $root 'landing_pad_instructions.txt') arm64trap-optimized\ }
+          if (Test-Path (Join-Path $root 'arm64trap_disasm.txt')) { Copy-Item (Join-Path $root 'arm64trap_disasm.txt') arm64trap-optimized\ }
+          if (Test-Path arm64trap_output.txt) { Copy-Item arm64trap_output.txt arm64trap-optimized\ }
+          if (Test-Path (Join-Path $root 'arm64trap_unopt.exe')) { Copy-Item (Join-Path $root 'arm64trap_unopt.exe') arm64trap-unoptimized\ }
+          if (Test-Path (Join-Path $root 'landing_pad_unopt_instructions.txt')) { Copy-Item (Join-Path $root 'landing_pad_unopt_instructions.txt') arm64trap-unoptimized\ }
+          if (Test-Path (Join-Path $root 'arm64trap_unopt_disasm.txt')) { Copy-Item (Join-Path $root 'arm64trap_unopt_disasm.txt') arm64trap-unoptimized\ }
+          if (Test-Path arm64trap_unopt_output.txt) { Copy-Item arm64trap_unopt_output.txt arm64trap-unoptimized\ }
+          Write-Host "arm64trap-optimized:"; Get-ChildItem arm64trap-optimized | Format-Table Name -AutoSize
+          Write-Host "arm64trap-unoptimized:"; Get-ChildItem arm64trap-unoptimized | Format-Table Name -AutoSize
+        shell: pwsh
+
+      - name: Upload artifact – arm64trap optimized
+        uses: actions/upload-artifact@v4
+        with:
+          name: arm64trap-optimized
+          path: arm64trap-optimized
+          retention-days: 7
+
+      - name: Upload artifact – arm64trap unoptimized
+        uses: actions/upload-artifact@v4
+        with:
+          name: arm64trap-unoptimized
+          path: arm64trap-unoptimized
+          retention-days: 7
 
       # On failure, upload arm64trap output for offline inspection (VEH address, UNWIND lines).
       - name: Upload arm64trap output on failure (diagnostics)

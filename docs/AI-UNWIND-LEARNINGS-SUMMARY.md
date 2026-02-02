@@ -110,6 +110,19 @@ Commits on top of feature/win-aarch64:
 
 **Bypass experiment (2026-02-01):** When FPC_ARM64_UNWIND_BYPASS_RTLUNWINDEX is defined, _fpc_local_unwind calls RtlRestoreContext(@ctx, nil) instead of RtlUnwindEx. Finally blocks do NOT run; we jump straight to the landing pad. CI is built with this define for diagnostic: if we get "Done." + "LANDED at first instr" → our ctx is correct and the bug is in RtlUnwindEx.
 
+**Bypass run (2026-02-01) — Sp/Fp correct, still fault:**
+
+| Where | Pc | Sp | Fp | Lr |
+|-------|-----|-----|-----|-----|
+| **Step 7** (we pass to RtlRestoreContext) | $57A780 | $7F01BFFB00 | $7F01BFFB20 | $7FF77B2A2510 |
+| **VEH at fault** (first exception C0000005) | $57A780 | $7F01BFFB00 | $7F01BFFB20 | $7FF77B2A2510 |
+
+- Sp and Fp at fault **match** our ctx (EstablisherFrame and ctx.Fp). So **our constructed context is correct**; RtlRestoreContext did restore Sp/Fp as we set them.
+- We still get **STATUS_ACCESS_VIOLATION at the landing pad** ($57A780). So the fault is **not** “wrong SP/FP”; with correct SP/FP the first instruction at the landing pad still faults.
+- Possible causes: (1) first instruction at landing pad is not `str x0,[sp]` but uses another address (e.g. wrong base reg or offset); (2) memory at [Sp] not writable (guard page, wrong region); (3) another register (e.g. X0 or address-forming reg) not restored by RtlRestoreContext and wrong at landing pad; (4) alignment or .pdata mismatch.
+- Second VEH: ExceptionCode=$C00000AA, ExceptionAddress=$D7B2 (bogus) — cascade after we patched and continued from the first fault.
+- **Next:** Disassemble the instruction at the landing pad (e.g. `llvm-objdump -d` on arm64trap.exe, or CI step); check whether [Sp] is writable; confirm which operand faults (address vs. data).
+
 **Next plan (in order):**
 
 1. ~~Run CI~~ Done. Inspect artifact for step 3 (frame vs EstablisherFrame, delta_target_caller) and confirm Sp at fault matches EstablisherFrame.
@@ -160,6 +173,7 @@ Track each fix attempt so we don't go backwards. **Do not repeat** failed attemp
 | 1 | 2026-02-01 | **Handler patches Sp/Fp from stored target:** _fpc_local_unwind stores target_sp/target_fp; handler sets ContextRecord.Sp/Fp to those values (when <>0). | **Did not fix.** Handler "after patch" showed Sp=$9E2DBFF810, Fp=$9E2DBFF830; at fault VEH still had **Sp=$9E2DBFF230** (Step 1 Sp). OS overwrites our patch or uses a different context for the final restore. | Do not rely on handler Sp/Fp patch alone; OS does not use it for restore. |
 | 2 | (opus45) | **FP as TargetFrame:** pass ctx.Fp as first arg to RtlUnwindEx. | INVALID_UNWIND_TARGET. | Do not use FP as TargetFrame. |
 | 3 | (earlier) | **Pc/Sp from dispatch.TargetIp/EstablisherFrame in handler.** | Wrong: those refer to current frame, not target. Reverted. | Do not overwrite Pc/Sp in handler from dispatch. |
+| 4 | 2026-02-01 | **Bypass RtlUnwindEx:** call RtlRestoreContext(@ctx, nil) instead. | **Proved our ctx is correct:** at fault Sp=$7F01BFFB00, Fp=$7F01BFFB20 (match our ctx). Still fault at landing pad → RtlUnwindEx restores wrong context; with our ctx, Sp/Fp are right but first instruction still faults (stack slot? page?). | Use bypass as proof; next: why does first instr fault with correct Sp? |
 
 ---
 
@@ -173,13 +187,37 @@ Use this list so we don’t go in circles. Update the “Result” column when d
 | 2 | **system.ppu contains _fpc_local_unwind** (CI step) | (in workflow) | Done. Step "Diagnose system.ppu" checks this. |
 | 3 | **VEH ContextAtFault:** which register wrong at landing pad | 2026-02-01 | Done. Sp and Fp wrong (Caller-SP/Caller-FP); Pc and Lr OK. |
 | 4 | **Compare step 3 EstablisherFrame vs VEH Sp at fault** (artifact) | 2026-02-01 | Done. **Sp at fault ≠ EstablisherFrame.** Sp at fault = Step 1 Sp (_fpc_local_unwind’s SP); we passed Sp = EstablisherFrame ($6A543FF9E0). OS restored wrong frame’s SP. |
-| 5 | **Bypass RtlUnwindEx:** call RtlRestoreContext(@ctx, nil) instead (FPC_ARM64_UNWIND_BYPASS_RTLUNWINDEX) | 2026-02-01 | In progress. Diagnostic only: finally won't run; if we get "Done." + "LANDED at first instr" → our ctx is correct. |
+| 5 | **Bypass RtlUnwindEx:** call RtlRestoreContext(@ctx, nil) instead (FPC_ARM64_UNWIND_BYPASS_RTLUNWINDEX) | 2026-02-01 | Done. **Our ctx is correct:** at fault VEH showed Sp=$7F01BFFB00, Fp=$7F01BFFB20 (match step 7 ctx). We still fault at landing pad → bug is in RtlUnwindEx (OS restores wrong context); landing-pad fault with correct Sp/Fp may be stack slot / first instruction / page. |
 | 6 | **Minimal path (no handler patch):** remove Lr/Fp patch, only _fpc_local_unwind setup | — | Pending. See if crash changes (e.g. LR now wrong too). |
 | 7 | **Compiler passes Local-SP (or second frame):** use as ctx.Sp instead of EstablisherFrame | — | Pending. Requires compiler change. |
 | 8 | **FP as TargetFrame:** pass ctx.Fp as first arg to RtlUnwindEx | (opus45) | Tried. INVALID_UNWIND_TARGET. |
 | 9 | **.pdata/.xdata:** llvm-objdump -u arm64trap.exe for TestException, _fpc_local_unwind | — | Pending. Check alignment, frame register. |
 | 10 | **CI assert:** output contains "step 0" so we fail if ARM64 path missing | 2026-02-01 | Done. Workflow now emits notice "ARM64 unwind path verified (step 0 present)". |
 | 11 | **Handler patches Sp/Fp from stored target** | 2026-02-01 | Done. **Did not fix.** At fault Sp still Step 1 Sp; OS overwrites or uses different context. See §5c attempt #1. |
+| 12 | **Bypass run: Sp/Fp at fault vs step 7** | 2026-02-01 | Done. **Match.** Our ctx is correct; fault at landing pad with correct Sp/Fp → next: disasm at landing pad, [Sp] writable, other reg. |
+| 13 | **Disassemble instruction at landing pad** (CI step + artifact) | 2026-02-01 | Done. CI step "Disassemble landing pad" runs extract_unwind_target.py; snippet in arm64-exes/landing_pad_instructions.txt. See §5e. |
+
+---
+
+## 5e. CI landing-pad disasm, debug build, and “does anyone else have this?”
+
+**Landing-pad disassembly in CI**
+
+- **Step:** "Disassemble landing pad (arm64trap) – Bounty Boss" (crossbuild job).
+- **What it does:** Runs `extract_unwind_target.py` on `arm64-exes/arm64trap_disasm.txt` (from `llvm-objdump -d`). The script finds the `bl _FPC_local_unwind` call, resolves the target (landing-pad) address from the preceding adrp/add, and prints the **next 6 instructions at that address**.
+- **Artifact:** Full output (including "resolved target = 0x...") is saved to **arm64-exes/landing_pad_instructions.txt**, which is part of the `phase2-arm64-exes` artifact.
+- **How to use:** Download the artifact, open `landing_pad_instructions.txt`. Compare "resolved target" (hex) with runtime "target=$..." from FPC_DEBUG_WIN64_UNWIND in arm64trap_output.txt. The listed instructions are the landing pad; the first one is the one that faults with correct Sp/Fp — check whether it is `str x0,[sp]` or uses another base/offset.
+
+**Debug build**
+
+- **Current:** arm64trap is compiled with **-g** (debug info) so disassembly has symbols where available; codegen is unchanged.
+- **Optional -O-** (no optimizations): Would change codegen (different layout, possibly simpler landing pad). Not enabled by default; add to the arm64trap compile line if we want to compare optimized vs unoptimized behavior.
+
+**Does anyone else have this problem?**
+
+- **FPC:** No public reports found of "try...finally...exit crash on ARM64 Windows" or similar. Worth reporting to FPC bugtracker (gitlab.com/freepascal.org/fpc/source/-/issues) once we have a fix or a clear repro.
+- **Go:** Go’s Windows ARM64 runtime documents that **LR is not filled** unless ContextFlags includes CONTEXT_INTEGER (we already set that). Go’s SEH stack unwinding for Windows/ARM64 was still incomplete as of 1.20 (e.g. WinDbg/stack walk issues). So we’re not the only ones hitting ARM64 Windows unwind/context quirks; no direct “same bug” report found.
+- **MSDN / Stack Overflow:** RtlUnwindEx/RtlRestoreContext and STATUS_UNWIND_CONSOLIDATE are documented; no hit for “landing pad fault with correct SP” on ARM64.
 
 ---
 
