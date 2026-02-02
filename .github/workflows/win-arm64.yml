@@ -281,6 +281,16 @@ jobs:
             echo "::warning::arm64trap.s not found"
           fi
           echo "::endgroup::"
+          echo "::group::Assembly context: 20 lines around bl _FPC_local_unwind (shows ADRP+ADD for target)"
+          if [ -f "$D/arm64trap.s" ]; then
+            LINE=$(grep -n '_FPC_local_unwind' "$D/arm64trap.s" | head -1 | cut -d: -f1)
+            if [ -n "$LINE" ]; then
+              START=$((LINE - 15))
+              [ $START -lt 1 ] && START=1
+              sed -n "${START},$((LINE + 5))p" "$D/arm64trap.s"
+            fi
+          fi
+          echo "::endgroup::"
           echo "::group::Assembly: no-fix version (arm64trap_no_fix.s) – expect NO _FPC_local_unwind"
           if [ -f "$D/arm64trap_no_fix.s" ]; then
             if grep -q '_FPC_local_unwind\|_FPC_LOCAL_UNWIND' "$D/arm64trap_no_fix.s"; then
