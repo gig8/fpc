@@ -539,6 +539,12 @@ begin
       ' Sp=$',hexstr(ctx.Sp,16),' EstablisherFrame=$',hexstr(EstablisherFrame,16),' Lr=$',hexstr(ctx.Lr,16));
     writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND] step 3: frame(compiler)=$',hexstr(PtrUInt(frame),16),' target=$',hexstr(PtrUInt(target),16),
       ' delta_target_caller=$',hexstr(PtrUInt(target)-ctx.Pc,16));
+    writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND] step 3: ImageBase=$',hexstr(ImageBase,16),
+      ' target_offset=$',hexstr(PtrUInt(target)-ImageBase,16),
+      ' caller_offset=$',hexstr(ctx.Pc-ImageBase,16));
+    { Sanity check: if target is > 1MB from caller, it's likely wrong }
+    if (PtrUInt(target) > ctx.Pc + $100000) or (ctx.Pc > PtrUInt(target) + $100000) then
+      writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND] WARNING: target > 1MB from caller - address may be wrong!');
     Flush(stderr);
   end;
   {$endif FPC_DEBUG_WIN64_UNWIND}
