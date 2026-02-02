@@ -87,6 +87,27 @@ Commits on top of feature/win-aarch64:
 - **VEH context at fault:** Pc=$00007FF608D5A760, Sp=$000000B4877FF680, Lr=$00007FF608A8B5B8, Fp=$000000B4877FFC50.
 - **Interpretation:** PC is correct (landing pad = ExceptionAddress). LR is in image range (plausible return address). **Sp and Fp** are in a low range (0xB4877FFxxx) and are likely **Caller-SP / Caller-FP** (or wrong frame) rather than the **Local-SP / Local-FP** the landing pad expects—consistent with “RtlUnwindEx restores Caller-SP; first instruction `str x0,[sp]` faults.” Next: compare step 3 EstablisherFrame vs this Sp; try bypass (RtlRestoreContext) or supplying Local-SP.
 
+**Later run (same branch, 2026-02-01) — full comparison:**
+
+| Where | Sp | Fp |
+|-------|-----|-----|
+| **Step 1** (after RtlCaptureContext, inside _fpc_local_unwind) | $6A543FF400 | — |
+| **Step 3 / 7** (we pass to RtlUnwindEx: EstablisherFrame = TestException's SP) | $6A543FF9E0 | $6A543FFA00 |
+| **VEH at fault** (what RtlRestoreContext actually restored) | **$6A543FF400** | **$6A543FF9D0** |
+
+- **Sp at fault ($6A543FF400) = Step 1 Sp** — i.e. **_fpc_local_unwind's** SP (the frame that called RtlUnwindEx). We passed **ctx.Sp = $6A543FF9E0** (EstablisherFrame). So the OS did **not** use our Sp; it restored the **capturing frame's** SP. That matches Nynaeve: RtlUnwindEx overwrites our context at entry; the context used for the final restore appears to have Sp (and Fp) from the wrong frame.
+- **delta_target_caller = $2D8270** (~2.98 MB) — landing pad and caller are far apart in the image (same function, big try/finally).
+- **frame(compiler) = EstablisherFrame = $6A543FF9E0** — they match; our context setup is consistent.
+- **Conclusion:** The bug is in **what the OS restores**, not in our EstablisherFrame. Bypass experiment (call RtlRestoreContext ourselves with our ctx, no RtlUnwindEx) is the next step: we control the full context and should land with Sp=$6A543FF9E0.
+
+**Answers to: (1) Can we fix it? (2) OS bug revert risk? (3) Sequencing?**
+
+1. **Can we fix it and make it work?** We're trying: store target Sp/Fp in globals in _fpc_local_unwind before RtlUnwindEx; in the handler, patch ContextRecord.Sp and ContextRecord.Fp to those values (in addition to Lr/Fp). If the OS uses our patched ContextRecord for the final RtlRestoreContext, we should land with the right SP/FP. If the OS overwrites our patch after we return, we'll need the bypass or another approach.
+2. **If it's an OS "bug", would it get reverted?** The behavior (RtlUnwindEx overwrites our context at entry; the context used for restore has the capturing frame's SP/FP) matches Nynaeve's x64 analysis and may be by design. So it's not a Windows bug we're working around; we're adapting to the API: we can't control the context RtlUnwindEx builds, so we patch it in the handler. A future OS update could change how/when the context is applied; our patch is "correct" for the contract (we supply target Sp/Fp so the restored context is consistent). Unlikely to be "reverted" unless the OS stops calling our handler or changes ContextRecord semantics.
+3. **Is it possible we're sequencing commands wrong?** Our sequencing (RtlCaptureContext → RtlVirtualUnwind → set Pc/Sp/ContextFlags → RtlUnwindEx) matches longjmp-style usage. The issue isn't our order of calls; it's that RtlUnwindEx overwrites our context at entry, so the OS never uses our Sp/Fp for the final restore. Patching in the handler is the only place we can correct the context the OS will use.
+
+**Fix attempt (2026-02-01):** In seh64.inc (ARM64): _fpc_local_unwind stores ctx.Sp and ctx.Fp in fpc_local_unwind_target_sp/fp before RtlUnwindEx; __FPC_specific_handler patches ContextRecord.Sp and ContextRecord.Fp to those values (when non-zero) on every unwind call. Debug: step 7 logs stored target_sp/target_fp; handler logs "after patch (Sp/Fp from target)".
+
 **Next plan (in order):**
 
 1. ~~Run CI~~ Done. Inspect artifact for step 3 (frame vs EstablisherFrame, delta_target_caller) and confirm Sp at fault matches EstablisherFrame.
@@ -137,13 +158,14 @@ Use this list so we don’t go in circles. Update the “Result” column when d
 | 1 | **Cross-compile fix:** ARM64 path in built RTL (options.pas target macros) | 2026-02-01 | Done. CI shows step 0–7 and handler UNWIND patch → ARM64 path present. |
 | 2 | **system.ppu contains _fpc_local_unwind** (CI step) | (in workflow) | Done. Step "Diagnose system.ppu" checks this. |
 | 3 | **VEH ContextAtFault:** which register wrong at landing pad | 2026-02-01 | Done. Sp and Fp wrong (Caller-SP/Caller-FP); Pc and Lr OK. |
-| 4 | **Compare step 3 EstablisherFrame vs VEH Sp at fault** (artifact) | — | Pending. Confirm Sp at fault equals EstablisherFrame. |
+| 4 | **Compare step 3 EstablisherFrame vs VEH Sp at fault** (artifact) | 2026-02-01 | Done. **Sp at fault ≠ EstablisherFrame.** Sp at fault = Step 1 Sp (_fpc_local_unwind’s SP); we passed Sp = EstablisherFrame ($6A543FF9E0). OS restored wrong frame’s SP. |
 | 5 | **Bypass RtlUnwindEx:** call RtlRestoreContext(@ctx, nil) instead | — | Pending. If works → bug in RtlUnwindEx; if not → bug in our ctx. |
 | 6 | **Minimal path (no handler patch):** remove Lr/Fp patch, only _fpc_local_unwind setup | — | Pending. See if crash changes (e.g. LR now wrong too). |
 | 7 | **Compiler passes Local-SP (or second frame):** use as ctx.Sp instead of EstablisherFrame | — | Pending. Requires compiler change. |
 | 8 | **FP as TargetFrame:** pass ctx.Fp as first arg to RtlUnwindEx | (opus45) | Tried. INVALID_UNWIND_TARGET. |
 | 9 | **.pdata/.xdata:** llvm-objdump -u arm64trap.exe for TestException, _fpc_local_unwind | — | Pending. Check alignment, frame register. |
 | 10 | **CI assert:** output contains "step 0" so we fail if ARM64 path missing | 2026-02-01 | Done. Workflow now emits notice "ARM64 unwind path verified (step 0 present)". |
+| 11 | **Handler patches Sp/Fp from stored target:** _fpc_local_unwind stores target Sp/Fp; handler writes them to ContextRecord | 2026-02-01 | In progress. CI will show if VEH Sp/Fp at fault now match target. |
 
 ---
 
