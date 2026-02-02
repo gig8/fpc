@@ -161,6 +161,7 @@ begin
     STATUS_REG_NAT_CONSUMPTION,                           { ARM64 register consumption }
     STATUS_UNWIND_CONSOLIDATE,                            { Unwind consolidate callback }
     STATUS_FATAL_APP_EXIT,                                { FatalAppExit called }
+    STATUS_DATATYPE_MISALIGNMENT,                         { ARM64 alignment exception on exit }
     DBG_EXCEPTION_NOT_HANDLED,                            { Debugger: exception not handled }
     DBG_TERMINATE_PROCESS,                                { Debugger: terminate process }
     DBG_TERMINATE_THREAD:               result := 0;      { Exit cleanly on shutdown }
