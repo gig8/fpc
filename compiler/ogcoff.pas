@@ -1494,9 +1494,10 @@ const pemagic : array[0..3] of byte = (
                 RELOC_ADR_PREL_PG_HI21:
                   begin
                     addend:=((address shr 29) and $3) or (((address shr 5) and $7ffff) shl 2);
-                    { sign extend the value if necessary }
-                    if (addend and (1 shl 21)) <> 0 then
-                      addend:=addend or sarint64(1 shl 63, 12);
+                    { sign extend the value if necessary. The addend is a 21-bit signed value,
+                      so the sign bit is at position 20 (0-indexed). If set, extend to 64 bits. }
+                    if (addend and (1 shl 20)) <> 0 then
+                      addend:=addend or (not ((int64(1) shl 21) - 1));
                     relocval:=relocval shr 12;
                     relocval:=int64((relocval-(objsec.mempos+objreloc.dataoffset) shr 12)+addend);
                     address:=address and not (($3 shl 29) or ($7ffff shl 5));
