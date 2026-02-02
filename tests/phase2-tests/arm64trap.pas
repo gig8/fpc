@@ -12,7 +12,8 @@
 program arm64trap;
 {$mode objfpc}
 
-{ Minimal types for Vectored Exception Handler to log crash (ExceptionCode + ExceptionAddress). }
+{ Minimal types for Vectored Exception Handler to log crash (ExceptionCode + ExceptionAddress)
+  and, on ARM64, the context at fault (Pc/Sp/Lr/Fp) to diagnose which register is wrong. }
 type
   PExceptionRecord = ^TExceptionRecord;
   TExceptionRecord = record
@@ -29,16 +30,33 @@ type
     ContextRecord: Pointer;
   end;
   TVectoredHandler = function(excep: PExceptionPointers): LongInt; stdcall;
+  { ARM64 Windows CONTEXT layout (match RTL/win64/seh64.inc) so we can read Pc/Sp/Lr/Fp at fault. }
+  PArm64Ctx = ^TArm64Ctx;
+  TArm64Ctx = record
+    ContextFlags: LongWord;
+    Cpsr: LongWord;
+    X0, X1, X2, X3, X4, X5, X6, X7, X8, X9, X10, X11, X12, X13, X14, X15,
+    X16, X17, X18, X19, X20, X21, X22, X23, X24, X25, X26, X27, X28: QWord;
+    Fp, Lr, Sp, Pc: QWord;
+  end;
 
 function AddVectoredExceptionHandler(First: DWord; Handler: TVectoredHandler): Pointer;
   external 'kernel32' name 'AddVectoredExceptionHandler';
 
 function LogExceptionVEH(excep: PExceptionPointers): LongInt; stdcall;
+var
+  ctx: PArm64Ctx;
 begin
   if (excep <> nil) and (excep^.ExceptionRecord <> nil) then
   begin
     writeln(stderr, '[VEH] ExceptionCode=$', HexStr(excep^.ExceptionRecord^.ExceptionCode, 8),
       ' ExceptionAddress=$', HexStr(PtrUInt(excep^.ExceptionRecord^.ExceptionAddress), 16));
+    if (excep^.ContextRecord <> nil) then
+    begin
+      ctx := PArm64Ctx(excep^.ContextRecord);
+      writeln(stderr, '[VEH] ContextAtFault Pc=$', HexStr(ctx^.Pc, 16), ' Sp=$', HexStr(ctx^.Sp, 16),
+        ' Lr=$', HexStr(ctx^.Lr, 16), ' Fp=$', HexStr(ctx^.Fp, 16), ' ContextFlags=$', HexStr(ctx^.ContextFlags, 8));
+    end;
     Flush(stderr);
   end;
   Result := 0;  { EXCEPTION_CONTINUE_SEARCH }
