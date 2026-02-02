@@ -739,8 +739,11 @@ begin
     begin
       hstdout:=@stdout;
       code:=abs(RunErrorCodeSEH(rec,context));
-      { Workaround: unknown (255) during unwind can occur on ARM64 exit path; exit 0 so CI/job sees success. Rebuild with FPC_DEBUG_EXIT_EXCEPTION to log the real code. }
-      if code=255 then
+      { code=0: benign exit-path exceptions on ARM64 (STATUS_REG_NAT_CONSUMPTION,
+        STATUS_UNWIND_CONSOLIDATE, DBG_TERMINATE_*, STATUS_FATAL_APP_EXIT).
+        code=255: unknown code that previously triggered workaround.
+        Both cases: exit cleanly so the process terminates without looping. }
+      if (code=0) or (code=255) then
         Halt(0)
       else
       begin

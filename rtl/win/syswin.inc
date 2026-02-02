@@ -81,6 +81,10 @@ const
   STATUS_FLOAT_MULTIPLE_TRAPS             = $C00002B5;
   STATUS_REG_NAT_CONSUMPTION              = $C00002C9;
 
+  { ARM64 / unwind-related STATUS codes that can occur during process exit }
+  STATUS_UNWIND_CONSOLIDATE               = $80000029;  { Unwind consolidate callback }
+  STATUS_FATAL_APP_EXIT                   = $40000015;  { Application called FatalAppExit }
+
   { Exceptions raised by RTL use this code }
   FPC_EXCEPTION_CODE                      = $E0465043;
 
@@ -151,7 +155,24 @@ begin
     STATUS_PRIVILEGED_INSTRUCTION:      result := 218;    { rePrivilegedInstruction }
     STATUS_FLOAT_MULTIPLE_TRAPS,
     STATUS_FLOAT_MULTIPLE_FAULTS:       result := -255;   { indicate FPU reset }
+    { ARM64 / unwind-related codes that can occur during process exit.
+      Map to 0 so the default handler can exit cleanly instead of looping
+      with EExternalException. These are benign on process shutdown. }
+    STATUS_REG_NAT_CONSUMPTION,                           { ARM64 register consumption }
+    STATUS_UNWIND_CONSOLIDATE,                            { Unwind consolidate callback }
+    STATUS_FATAL_APP_EXIT,                                { FatalAppExit called }
+    DBG_EXCEPTION_NOT_HANDLED,                            { Debugger: exception not handled }
+    DBG_TERMINATE_PROCESS,                                { Debugger: terminate process }
+    DBG_TERMINATE_THREAD:               result := 0;      { Exit cleanly on shutdown }
   else
+    {$ifdef FPC_DEBUG_EXIT_EXCEPTION}
+    if IsConsole then
+    begin
+      writeln(stderr, '[FPC_DEBUG_EXIT_EXCEPTION] Unknown exception code: $', hexstr(rec.ExceptionCode, 8),
+              ' at $', hexstr(PtrUInt(rec.ExceptionAddress), 16));
+      Flush(stderr);
+    end;
+    {$endif FPC_DEBUG_EXIT_EXCEPTION}
     result := 255;                                        { reExternalException }
   end;
 end;

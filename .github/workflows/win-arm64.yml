@@ -76,6 +76,7 @@ jobs:
             fpc-compiler-${{ runner.os }}-
 
       # FPC_ARM64_UNWIND_BYPASS_RTLUNWINDEX: diagnostic; skips RtlUnwindEx, calls RtlRestoreContext (finally won't run; pass = LANDED + Done.).
+      # FPC_DEBUG_EXIT_EXCEPTION: log unknown exception codes during exit path (helps diagnose EExternalException on ppca64 shutdown).
 
       - name: Cross-install FPC aarch64-win64
         id: crossinstall
@@ -86,7 +87,7 @@ jobs:
             OS_TARGET=win64 \
             FPC=/usr/bin/fpc \
             BINUTILSPREFIX=aarch64-w64-mingw32- \
-            CROSSOPT="-FD$RUNNER_TEMP/llvm-mingw/bin" \
+            CROSSOPT="-FD$RUNNER_TEMP/llvm-mingw/bin -dFPC_DEBUG_EXIT_EXCEPTION" \
             INSTALL_PREFIX="$RUNNER_TEMP/fpc_install" \
             2>&1 | tee "$RUNNER_TEMP/crossinstall.log"
           exit "${PIPESTATUS[0]}"

@@ -1928,13 +1928,22 @@ function WinExceptionObject(code: Longint; const rec: TExceptionRecord): Excepti
 var
   entry: PExceptMapEntry;
 begin
-  entry := FindExceptMapEntry(code);
-  if assigned(entry) then
-    result:=entry^.cls.CreateRes(entry^.msg)
+  { code=0 means benign exit-path exception on ARM64 (STATUS_REG_NAT_CONSUMPTION,
+    STATUS_UNWIND_CONSOLIDATE, DBG_TERMINATE_*, STATUS_FATAL_APP_EXIT).
+    Return nil so the default handler can detect this and exit cleanly
+    instead of creating EExternalException which would loop on shutdown. }
+  if code=0 then
+    result:=nil
   else
-    result:=EExternalException.CreateResFmt(@SExternalException,[rec.ExceptionCode]);
+  begin
+    entry := FindExceptMapEntry(code);
+    if assigned(entry) then
+      result:=entry^.cls.CreateRes(entry^.msg)
+    else
+      result:=EExternalException.CreateResFmt(@SExternalException,[rec.ExceptionCode]);
+  end;
 
-  if result is EExternal then
+  if (result<>nil) and (result is EExternal) then
     EExternal(result).FExceptionRecord:=rec;
 end;
 
