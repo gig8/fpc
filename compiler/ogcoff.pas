@@ -1493,6 +1493,15 @@ const pemagic : array[0..3] of byte = (
                   end;
                 RELOC_ADR_PREL_PG_HI21:
                   begin
+                    { DEBUG: Trace ADRP relocation }
+                    if assigned(objreloc.symbol) then
+                      writeln(stderr,'[ADRP] sym=',objreloc.symbol.name,
+                        ' sym.offset=',hexstr(objreloc.symbol.offset,8),
+                        ' sec.mempos=',hexstr(objreloc.symbol.objsection.mempos,8),
+                        ' relocval(addr)=',hexstr(relocval,8),
+                        ' instr_off=',hexstr(objreloc.dataoffset,8))
+                    else
+                      writeln(stderr,'[ADRP] <no symbol> relocsec.mempos=',hexstr(relocsec.mempos,8));
                     addend:=((address shr 29) and $3) or (((address shr 5) and $7ffff) shl 2);
                     { sign extend the value if necessary. The addend is a 21-bit signed value,
                       so the sign bit is at position 20 (0-indexed). If set, extend to 64 bits. }
@@ -1502,6 +1511,8 @@ const pemagic : array[0..3] of byte = (
                     relocval:=int64((relocval-(objsec.mempos+objreloc.dataoffset) shr 12)+addend);
                     address:=address and not (($3 shl 29) or ($7ffff shl 5));
                     address:=address or ((relocval and $3) shl 29) or (((relocval shr 2) and $7ffff) shl 5);
+                    { DEBUG: Show result }
+                    writeln(stderr,'[ADRP] addend=',addend,' page_diff=',relocval shr 12,' result_addr=',hexstr(address,8));
                   end;
                 RELOC_LDST8_ABS_LO12,
                 RELOC_ADD_ABS_LO12:
