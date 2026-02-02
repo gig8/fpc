@@ -289,6 +289,20 @@ jobs:
               [ $START -lt 1 ] && START=1
               sed -n "${START},$((LINE + 5))p" "$D/arm64trap.s"
             fi
+            # Extract the landing pad label from adrp x1,.Lj... and find its definition
+            LABEL=$(grep -B 3 '_FPC_local_unwind' "$D/arm64trap.s" | grep 'adrp.*x1' | sed 's/.*adrp.*x1,//' | tr -d ' ')
+            if [ -n "$LABEL" ]; then
+              echo ""
+              echo "Landing pad label: $LABEL"
+              echo "Searching for label definition..."
+              grep -n "^${LABEL}:" "$D/arm64trap.s" || echo "(label not found as standalone definition)"
+              # Show context where label is defined
+              LABEL_LINE=$(grep -n "^${LABEL}:" "$D/arm64trap.s" | head -1 | cut -d: -f1)
+              if [ -n "$LABEL_LINE" ]; then
+                echo "Context around $LABEL definition:"
+                sed -n "$((LABEL_LINE - 2)),$((LABEL_LINE + 10))p" "$D/arm64trap.s"
+              fi
+            fi
           fi
           echo "::endgroup::"
           echo "::group::Assembly: no-fix version (arm64trap_no_fix.s) – expect NO _FPC_local_unwind"
