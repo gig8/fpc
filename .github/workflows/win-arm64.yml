@@ -13,10 +13,10 @@ name: Windows arm64
 
 on:
   push:
-    # feature/win-aarch64* matches feature/win-aarch64, feature/win-aarch64-opus45, feature/win-aarch64-gpt52, etc.
-    branches: [ develop, feature/win-aarch64*, main, bounty-submission ]
+    # feature/win-aarch64* and win-aarch64* match various experiment branches.
+    branches: [ develop, feature/win-aarch64*, win-aarch64*, main, bounty-submission ]
   pull_request:
-    branches: [ develop, feature/win-aarch64*, main, bounty-submission ]
+    branches: [ develop, feature/win-aarch64*, win-aarch64*, main, bounty-submission ]
   workflow_dispatch:  # Run manually from Actions tab → "Windows arm64" → "Run workflow"
 
 env:
@@ -678,8 +678,75 @@ jobs:
           exit 0
         shell: pwsh
 
-      # ppca64 (Phase 3 native compiler) – skipped for now: gets stuck when run on Windows ARM64.
-      # We will come back to this; build/stage still happens in crossbuild job for future use.
+      # ppca64 (Phase 3 native compiler) – test on Windows ARM64.
+      # Run with timeout; capture output for diagnostics (may crash, loop, or succeed).
+      - name: Run ppca64.exe -iV (native ARM64 compiler test)
+        id: ppca64_test
+        run: |
+          Set-Location $env:GITHUB_WORKSPACE
+          $root = if (Test-Path phase2-arm64-exes) { 'phase2-arm64-exes' } elseif (Test-Path arm64-exes) { 'arm64-exes' } else { '.' }
+          $dir = if (Test-Path (Join-Path $root 'ppca64.exe')) { $root } else { (Join-Path $root 'arm64-exes') }
+          $exe = Join-Path $dir 'ppca64.exe'
+          if (-not (Test-Path $exe)) {
+            Write-Host "ppca64.exe not found in artifact, skipping"
+            echo "ppca64_found=false" >> $env:GITHUB_OUTPUT
+            exit 0
+          }
+          echo "ppca64_found=true" >> $env:GITHUB_OUTPUT
+          Write-Host "=== ppca64.exe -iV (with 30s timeout) ==="
+          Write-Host "Exe: $exe"
+          $outFile = "$env:GITHUB_WORKSPACE/ppca64_output.txt"
+          try {
+            $proc = Start-Process -FilePath $exe -ArgumentList "-iV" -NoNewWindow -PassThru -RedirectStandardOutput "$outFile.stdout" -RedirectStandardError "$outFile.stderr"
+            $finished = $proc.WaitForExit(30000)  # 30 second timeout
+            if (-not $finished) {
+              Write-Host "::warning::ppca64.exe -iV timed out after 30s (killing process)"
+              $proc.Kill()
+              "TIMEOUT after 30s" | Out-File -Append $outFile
+            }
+            $exitCode = $proc.ExitCode
+            Write-Host "Exit code: $exitCode"
+            echo "ppca64_exitcode=$exitCode" >> $env:GITHUB_OUTPUT
+          } catch {
+            Write-Host "::warning::Exception running ppca64.exe: $_"
+            "EXCEPTION: $_" | Out-File -Append $outFile
+            echo "ppca64_exitcode=-1" >> $env:GITHUB_OUTPUT
+          }
+          # Combine stdout and stderr
+          if (Test-Path "$outFile.stdout") { Get-Content "$outFile.stdout" | Out-File -Append $outFile }
+          if (Test-Path "$outFile.stderr") { Get-Content "$outFile.stderr" | Out-File -Append $outFile }
+          # Show output
+          Write-Host "=== ppca64.exe output ==="
+          if (Test-Path $outFile) {
+            $out = Get-Content $outFile -Raw
+            Write-Host $out
+            # Check for version string
+            if ($out -match '3\.3\.1') {
+              Write-Host "::notice::ppca64.exe printed version 3.3.1"
+              echo "ppca64_version=true" >> $env:GITHUB_OUTPUT
+            } else {
+              Write-Host "::warning::ppca64.exe did not print expected version"
+              echo "ppca64_version=false" >> $env:GITHUB_OUTPUT
+            }
+          } else {
+            Write-Host "No output captured"
+            echo "ppca64_version=false" >> $env:GITHUB_OUTPUT
+          }
+          # Don't fail the step - we want to see what happens
+          exit 0
+        shell: pwsh
+
+      - name: Upload ppca64 output artifact
+        if: steps.ppca64_test.outputs.ppca64_found == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ppca64-output
+          path: |
+            ${{ github.workspace }}/ppca64_output.txt
+            ${{ github.workspace }}/ppca64_output.txt.stdout
+            ${{ github.workspace }}/ppca64_output.txt.stderr
+          retention-days: 7
+          if-no-files-found: ignore
 
       # Two artifacts (optimized and unoptimized) for comparison; download and send to AI when done.
       - name: Upload arm64trap optimized and unoptimized artifacts
