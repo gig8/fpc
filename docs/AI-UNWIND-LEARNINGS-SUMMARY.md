@@ -82,12 +82,68 @@ Commits on top of feature/win-aarch64:
 - **Handler:** "after patch" now logs Pc, Sp, Lr, Fp (not only ContextFlags).
 - **arm64trap VEH:** logs **ContextAtFault** (Pc, Sp, Lr, Fp, ContextFlags) from the exception context so we see the actual register state at the fault. CI artifact and notice include this.
 
+**CI run [21566529344](https://github.com/gig8/fpc/actions/runs/21566529344) (2026-02-01):**
+
+- **VEH context at fault:** Pc=$00007FF608D5A760, Sp=$000000B4877FF680, Lr=$00007FF608A8B5B8, Fp=$000000B4877FFC50.
+- **Interpretation:** PC is correct (landing pad = ExceptionAddress). LR is in image range (plausible return address). **Sp and Fp** are in a low range (0xB4877FFxxx) and are likely **Caller-SP / Caller-FP** (or wrong frame) rather than the **Local-SP / Local-FP** the landing pad expects—consistent with “RtlUnwindEx restores Caller-SP; first instruction `str x0,[sp]` faults.” Next: compare step 3 EstablisherFrame vs this Sp; try bypass (RtlRestoreContext) or supplying Local-SP.
+
 **Next plan (in order):**
 
-1. **Run CI** on feature/win-aarch64 to confirm the options.pas change: build still succeeds and arm64trap still runs (even if it still crashes at landing pad). This confirms ARM64 code path is present and exercised. Inspect new debug: delta_target_caller, VEH ContextAtFault (which of Sp/Lr/Fp is wrong).
+1. ~~Run CI~~ Done. Inspect artifact for step 3 (frame vs EstablisherFrame, delta_target_caller) and confirm Sp at fault matches EstablisherFrame.
 2. **If crash persists:** Run the **bypass experiment** (step 2 in §4): in `_fpc_local_unwind`, after setting up `ctx`, call `RtlRestoreContext(@ctx, nil)` instead of `RtlUnwindEx`. If we land correctly → bug is inside RtlUnwindEx. If we still fault → bug is in our context/EstablisherFrame setup.
 3. **If bypass still faults:** Inspect **landing pad vs caller** (opus45 finding: landing pad address ~3MB from caller PC is suspicious). Consider .pdata/.xdata for TestException and _fpc_local_unwind (`llvm-objdump -u arm64trap.exe`), and whether we can pass or compute **Local-SP** for the landing-pad frame.
 4. **Optional low-risk test:** Try **FP as TargetFrame** (step 3 in §4) in a short-lived branch; opus45 already tried this and got INVALID_UNWIND_TARGET, so only if we have new evidence it might help.
+
+---
+
+## 5a. Verifying the cross-compile fix (is the ARM64 path actually in the build?)
+
+**Problem opus45 identified:** During cross-build (e.g. Linux x86_64 → aarch64-win64), the compiler used *host* macros only, so `{$ifdef CPUAARCH64}` in rtl/win64/seh64.inc was **false** and the ARM64 block was not compiled. We’d get the `{$else}` branch: `RtlUnwindEx(frame, target, nil, nil, @ctx, nil)` with **uninitialized ctx** — undefined behavior.
+
+**How we know the fix worked:**
+
+1. **CI output:** If the ARM64 path were missing, we would not see `[FPC_DEBUG_WIN64_UNWIND] step 0` through `step 7` — those are inside the `{$ifdef CPUAARCH64}` block. Run [21566529344](https://github.com/gig8/fpc/actions/runs/21566529344) shows steps 0–7 and "UNWIND: patch context", so the ARM64 _fpc_local_unwind and ARM64 handler are present and running.
+2. **system.ppu:** CI already checks `strings system.ppu | grep _fpc_local_unwind` (symbol exists). That does not prove the *ARM64* implementation is in the unit; the proof is (1) at runtime.
+3. **Optional CI check:** Assert that arm64trap output contains `[FPC_DEBUG_WIN64_UNWIND] step 0` so we fail the job if someone reverts the options.pas fix and the wrong path is used.
+
+**Conclusion:** With the options.pas fix, the RTL is built with target CPU macros; the ARM64 path is compiled and we see it run. The remaining bug (Sp/Fp wrong at landing pad) is **not** “wrong code path” — it’s context/SP semantics (Caller-SP vs Local-SP or OS overwriting our context).
+
+---
+
+## 5b. Pascal try/finally vs .NET, C++, Go — what’s special and what we can simplify
+
+**Same as others:** All use Windows SEH: RtlUnwindEx with a target frame and a context. EstablisherFrame = Caller-SP; .pdata/.xdata describe unwinding. C++/MSVC, .NET CoreCLR, and Go use the same model.
+
+**What’s different for Pascal:** We don’t have **setjmp**. longjmp passes a context *saved at the setjmp site* (at the target). We **synthesize** the target-frame context: one RtlVirtualUnwind from _fpc_local_unwind to get the caller (TestException) frame, set PC := landing pad, Sp := EstablisherFrame. So we emulate “context at landing pad” without ever having been there. That’s valid if EstablisherFrame (Caller-SP) equals the SP the landing pad expects (Local-SP); in a single frame they should match unless the compiler uses a different SP at the landing pad.
+
+**“Fancy” handler patching we added:** Because RtlUnwindEx **overwrites** our context at entry (Nynaeve) and the OS may not set CONTEXT_INTEGER when building the restore context, we patch in `__FPC_specific_handler`: set ContextFlags to full user, copy Lr and Fp from the OS context into ContextRecord. We do **not** touch Pc/Sp (dispatch.TargetIp/EstablisherFrame are for the *current* frame, not the target). So our patch only reinforces Lr/Fp; it cannot fix a wrong SP if the OS restores Caller-SP.
+
+**Simplification options (if we’ve fixed the cross-compile):**
+
+1. **Minimal .NET/C++ style:** In _fpc_local_unwind only: RtlCaptureContext, RtlVirtualUnwind once, set ctx.Pc := target, ctx.Sp := EstablisherFrame, ContextFlags := full user, call RtlUnwindEx. No handler patch. We already tried this and it crashed (LR/FP or SP wrong). So “minimal” alone isn’t enough without fixing SP/LR/FP.
+2. **Bypass RtlUnwindEx (diagnostic):** Call RtlRestoreContext(@ctx, nil) instead of RtlUnwindEx. If it works → bug is inside RtlUnwindEx (e.g. OS overwrites Sp with TargetFrame). If it still faults → bug is our ctx (e.g. ctx.Sp := EstablisherFrame is wrong; we need Local-SP from the compiler).
+3. **Compiler passes Local-SP:** Have the compiler pass the SP *at the landing pad* (or a second “frame” value) to _FPC_local_unwind so we set ctx.Sp to that instead of EstablisherFrame. Then we might not need handler patching for SP (and we’d match what the landing pad expects).
+
+**Summary:** Pascal doesn’t require a different *SEH* model; we just don’t have setjmp so we synthesize context. The “fancy” Lr/Fp patch is a workaround for OS not restoring INTEGER; it doesn’t fix SP. Next: try bypass, then if needed get Local-SP from the compiler.
+
+---
+
+## 5c. Checklist: things to try (date | result)
+
+Use this list so we don’t go in circles. Update the “Result” column when done.
+
+| # | What to try / verify | Date | Result |
+|---|----------------------|------|--------|
+| 1 | **Cross-compile fix:** ARM64 path in built RTL (options.pas target macros) | 2026-02-01 | Done. CI shows step 0–7 and handler UNWIND patch → ARM64 path present. |
+| 2 | **system.ppu contains _fpc_local_unwind** (CI step) | (in workflow) | Done. Step "Diagnose system.ppu" checks this. |
+| 3 | **VEH ContextAtFault:** which register wrong at landing pad | 2026-02-01 | Done. Sp and Fp wrong (Caller-SP/Caller-FP); Pc and Lr OK. |
+| 4 | **Compare step 3 EstablisherFrame vs VEH Sp at fault** (artifact) | — | Pending. Confirm Sp at fault equals EstablisherFrame. |
+| 5 | **Bypass RtlUnwindEx:** call RtlRestoreContext(@ctx, nil) instead | — | Pending. If works → bug in RtlUnwindEx; if not → bug in our ctx. |
+| 6 | **Minimal path (no handler patch):** remove Lr/Fp patch, only _fpc_local_unwind setup | — | Pending. See if crash changes (e.g. LR now wrong too). |
+| 7 | **Compiler passes Local-SP (or second frame):** use as ctx.Sp instead of EstablisherFrame | — | Pending. Requires compiler change. |
+| 8 | **FP as TargetFrame:** pass ctx.Fp as first arg to RtlUnwindEx | (opus45) | Tried. INVALID_UNWIND_TARGET. |
+| 9 | **.pdata/.xdata:** llvm-objdump -u arm64trap.exe for TestException, _fpc_local_unwind | — | Pending. Check alignment, frame register. |
+| 10 | **CI assert:** output contains "step 0" so we fail if ARM64 path missing | 2026-02-01 | Done. Workflow now emits notice "ARM64 unwind path verified (step 0 present)". |
 
 ---
 

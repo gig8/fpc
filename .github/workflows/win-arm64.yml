@@ -544,6 +544,12 @@ jobs:
             Write-Host "Bounty Boss (fix) failed: expected 'Success: Finally block executed!'. Got: $out"
           }
           echo "bounty_boss_ok=$ok" >> $env:GITHUB_OUTPUT
+          # Verify ARM64 unwind path was used (cross-compile fix: CPUAARCH64 defined so seh64.inc ARM64 block compiled)
+          if ($out -match '\[FPC_DEBUG_WIN64_UNWIND\] step 0:') {
+            Write-Host "::notice::ARM64 unwind path verified (step 0 present; cross-compile target macros working)"
+          } else {
+            Write-Host "::warning::ARM64 unwind path NOT seen (no step 0; check options.pas target CPU macros)"
+          }
           # Report unwind diagnostics: context patch (UNWIND or TARGET_UNWIND)? UNWIND branch? VEH fault?
           if ($out -match '\[FPC_DEBUG_WIN64_UNWIND\] (UNWIND: patch context|TARGET_UNWIND: before patch)') {
             Write-Host "::notice::Context patch was applied (UNWIND or TARGET_UNWIND path)"
