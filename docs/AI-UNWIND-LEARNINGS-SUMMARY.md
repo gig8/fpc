@@ -123,6 +123,13 @@ Commits on top of feature/win-aarch64:
 - Second VEH: ExceptionCode=$C00000AA, ExceptionAddress=$D7B2 (bogus) — cascade after we patched and continued from the first fault.
 - **Next:** Disassemble the instruction at the landing pad (e.g. `llvm-objdump -d` on arm64trap.exe, or CI step); check whether [Sp] is writable; confirm which operand faults (address vs. data).
 
+**Artifact analysis (2026-02-01, optimized + unoptimized):**
+
+- **Both builds:** Bypass runs; at fault Sp/Fp **match** step 7 (our ctx). Same crash: ACCESS_VIOLATION at landing pad. Optimized and unoptimized behave the same.
+- **Landing pad (from disasm):** Right after `bl _FPC_local_unwind` we have: **nop** (100002510), **bl fpc_get_output** (100002514), **str x0,[sp]** (100002518). So first instruction at pad is nop, then call, then store. The fault is likely on **str x0,[sp]** (first store to [SP]).
+- **frame(compiler) = EstablisherFrame** in logs → same value; using compiler frame for ctx.Sp wouldn’t change the value.
+- **Hypothesis:** [SP] may be in a **guard page** (first touch commits or faults). Try touching the stack at frame before RtlRestoreContext so the page is committed.
+
 **Next plan (in order):**
 
 1. ~~Run CI~~ Done. Inspect artifact for step 3 (frame vs EstablisherFrame, delta_target_caller) and confirm Sp at fault matches EstablisherFrame.
@@ -174,6 +181,7 @@ Track each fix attempt so we don't go backwards. **Do not repeat** failed attemp
 | 2 | (opus45) | **FP as TargetFrame:** pass ctx.Fp as first arg to RtlUnwindEx. | INVALID_UNWIND_TARGET. | Do not use FP as TargetFrame. |
 | 3 | (earlier) | **Pc/Sp from dispatch.TargetIp/EstablisherFrame in handler.** | Wrong: those refer to current frame, not target. Reverted. | Do not overwrite Pc/Sp in handler from dispatch. |
 | 4 | 2026-02-01 | **Bypass RtlUnwindEx:** call RtlRestoreContext(@ctx, nil) instead. | **Proved our ctx is correct:** at fault Sp=$7F01BFFB00, Fp=$7F01BFFB20 (match our ctx). Still fault at landing pad → RtlUnwindEx restores wrong context; with our ctx, Sp/Fp are right but first instruction still faults (stack slot? page?). | Use bypass as proof; next: why does first instr fault with correct Sp? |
+| 5 | 2026-02-01 | **Guard-page touch:** before RtlRestoreContext (bypass path), read PByte(frame)^ so the stack page may be committed. | Pending CI. If [SP] was in a guard page, the touch commits it and landing-pad str x0,[sp] may succeed. | Run CI; if no fix, try compiler Local-SP. |
 
 ---
 

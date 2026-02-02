@@ -482,6 +482,9 @@ var
   EstablisherFrame: QWord;
   ImageBase: QWord;
   FrameToUse: Pointer;
+  {$ifdef FPC_ARM64_UNWIND_BYPASS_RTLUNWINDEX}
+  touch_byte: Byte;  { guard-page touch before RtlRestoreContext }
+  {$endif}
 {$endif CPUAARCH64}
 begin
   {$ifdef FPC_DEBUG_WIN64_UNWIND}
@@ -598,12 +601,17 @@ begin
   { Bypass diagnostic: skip RtlUnwindEx and restore our context directly.
     Finally blocks will NOT run; we jump straight to the landing pad.
     If we land and run without fault, our ctx is correct and the bug is in RtlUnwindEx. }
+  { Touch the stack slot at frame so the page may be committed before we jump
+    (landing pad does str x0,[sp]; if [SP] was in a guard page, first touch faults or commits). }
+  touch_byte := PByte(frame)^;
   {$ifdef FPC_DEBUG_WIN64_UNWIND}
   if IsConsole then
   begin
-    writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND] bypass: calling RtlRestoreContext (finally will NOT run)');
+    writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND] bypass: touch frame byte=', touch_byte, '; calling RtlRestoreContext (finally will NOT run)');
     Flush(stderr);
   end;
+  {$else}
+  if touch_byte <> 0 then ;  { use so compiler does not optimize away the read }
   {$endif FPC_DEBUG_WIN64_UNWIND}
   RtlRestoreContext(@ctx, nil);
   {$else}
