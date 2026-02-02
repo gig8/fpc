@@ -2425,6 +2425,16 @@ const pemagic : array[0..3] of byte = (
            end;
 
            p:=FSymTbl[rel.sym];
+           { DEBUG: Show relocation symbol lookup }
+           if rel_type in [RELOC_ADR_PREL_PG_HI21, RELOC_ADD_ABS_LO12] then
+             begin
+               if assigned(p) then
+                 writeln(stderr,'[RELOC_READ] type=',ord(rel_type),' sym_idx=',rel.sym,
+                   ' sym_name=',p.name,' sym_offset=',hexstr(p.offset,8),
+                   ' data_addr=',hexstr(rel.address,8))
+               else
+                 writeln(stderr,'[RELOC_READ] type=',ord(rel_type),' sym_idx=',rel.sym,' NO SYMBOL');
+             end;
            if assigned(p) then
              s.addsymreloc(rel.address-s.mempos,p,rel_type)
            else
