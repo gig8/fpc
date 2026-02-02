@@ -177,20 +177,21 @@ jobs:
           cd "$P2"
           # With fix (default) – emits call to _FPC_local_unwind.
           # -g: emit debug info so disasm has symbols (optional; does not change codegen).
+          # -Xe: use external linker (lld) instead of internal linker (may have ADRP reloc bug)
           "$PPC" -Twin64 -XPaarch64-w64-mingw32- \
             -Fu"$UP/rtl" -Fu"$UP/rtl-objpas" \
             -FE. -FD"$RUNNER_TEMP/llvm-mingw/bin" \
-            -a -g -oarm64trap.exe arm64trap.pas
+            -Xe -a -g -oarm64trap.exe arm64trap.pas
           # Without fix – plain branch to finally
           "$PPC" -Twin64 -XPaarch64-w64-mingw32- -dFPC_NO_WIN64_LOCAL_UNWIND \
             -Fu"$UP/rtl" -Fu"$UP/rtl-objpas" \
             -FE. -FD"$RUNNER_TEMP/llvm-mingw/bin" \
-            -a -oarm64trap_no_fix.exe arm64trap.pas
+            -Xe -a -oarm64trap_no_fix.exe arm64trap.pas
           # Unoptimized (with fix) – compare landing-pad behaviour vs optimized
           "$PPC" -Twin64 -XPaarch64-w64-mingw32- \
             -Fu"$UP/rtl" -Fu"$UP/rtl-objpas" \
             -FE. -FD"$RUNNER_TEMP/llvm-mingw/bin" \
-            -a -g -O- -oarm64trap_unopt.exe arm64trap.pas
+            -Xe -a -g -O- -oarm64trap_unopt.exe arm64trap.pas
           cd "$GITHUB_WORKSPACE"
           if [ -f tests/phase2-tests/neontest.pas ]; then
             "$PPC" -Twin64 -XPaarch64-w64-mingw32- \
