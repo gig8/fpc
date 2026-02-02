@@ -14,9 +14,9 @@ name: Windows arm64
 on:
   push:
     # feature/win-aarch64* matches feature/win-aarch64, feature/win-aarch64-opus45, feature/win-aarch64-gpt52, etc.
-    branches: [ develop, feature/win-aarch64*, main ]
+    branches: [ develop, feature/win-aarch64*, main, bounty-submission ]
   pull_request:
-    branches: [ develop, feature/win-aarch64*, main ]
+    branches: [ develop, feature/win-aarch64*, main, bounty-submission ]
   workflow_dispatch:  # Run manually from Actions tab → "Windows arm64" → "Run workflow"
 
 env:

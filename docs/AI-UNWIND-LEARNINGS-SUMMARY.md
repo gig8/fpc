@@ -229,7 +229,77 @@ Use this list so we don’t go in circles. Update the “Result” column when d
 
 ---
 
-## 6. Related docs
+## 6. **RESOLVED** – Root Cause and Fix (2026-02-02)
+
+### Root Cause: Internal Linker ADRP/ADR Relocation Bug
+
+The crash was **not** caused by SEH/unwind logic, SP/FP mismatches, or context corruption. The real issue was in the **internal COFF linker** (`compiler/ogcoff.pas`): ARM64 `ADRP` and `ADR` instruction relocations were computed incorrectly, causing the **landing pad address** to be wrong by ~3MB.
+
+**The bug:** When processing `IMAGE_REL_ARM64_PAGEBASE_REL21` (ADRP) and `IMAGE_REL_ARM64_REL21` (ADR) relocations, the 21-bit immediate encoded in the instruction was treated as a **page count** to be added *after* converting addresses to page numbers. This is wrong.
+
+**Correct behavior (per LLVM lld, Go linker, .NET CoreCLR):** The 21-bit immediate is a **byte offset** that must be added to the symbol's absolute address *before* computing the page difference.
+
+### Diagnostic Evidence
+
+- **Runtime debug logs** showed `target_offset=$00000000002DA780` (~3MB from image base) while `caller_offset=$0000000000002510` (~9KB). The landing pad should be ~600 bytes from the caller, not 3MB away.
+- **`extract_unwind_target.py`** in CI confirmed the resolved target was `0x1002da780` (wrong) instead of `0x100002780` (correct).
+- **After fix:** target resolved to `0x100002780`, which is 628 bytes from the call site—correct.
+
+### The Fix
+
+**File: `compiler/ogcoff.pas`**
+
+1. **ADRP (`RELOC_ADR_PREL_PG_HI21`)** – around line 1494:
+   ```pascal
+   // Extract the 21-bit signed immediate (addend) from instruction
+   addend:=((address shr 29) and $3) or (((address shr 5) and $7ffff) shl 2);
+   // Sign extend: bit 20 is sign bit (not 21!)
+   if (addend and (1 shl 20)) <> 0 then
+     addend:=addend or (not ((int64(1) shl 21) - 1));
+   // LLVM-style: add addend to symbol address FIRST (as bytes),
+   // then compute page difference
+   relocval:=relocval + addend;  // target_addr = symbol_addr + addend
+   relocval:=(relocval shr 12) - ((objsec.mempos+objreloc.dataoffset) shr 12);
+   // Encode page difference into instruction
+   address:=address and not (($3 shl 29) or ($7ffff shl 5));
+   address:=address or ((relocval and $3) shl 29) or (((relocval shr 2) and $7ffff) shl 5);
+   ```
+
+2. **ADR (`RELOC_ADR_PREL_LO21`)** – around line 1483:
+   ```pascal
+   // Extract the 21-bit signed immediate (addend)
+   addend:=((address shr 29) and $3) or (((address shr 5) and $7ffff) shl 2);
+   // Sign extend: bit 20 is sign bit (not 21!)
+   if (addend and (1 shl 20)) <> 0 then
+     addend:=addend or (not ((int64(1) shl 21) - 1));
+   // Add addend to symbol address, then compute byte difference from PC
+   relocval:=relocval + addend;
+   relocval:=relocval - (objsec.mempos + objreloc.dataoffset);
+   // Encode byte difference into instruction
+   address:=address and not (($3 shl 29) or ($7ffff shl 5));
+   address:=address or ((relocval and $3) shl 29) or (((relocval shr 2) and $7ffff) shl 5);
+   ```
+
+**File: `compiler/options.pas`** (prerequisite fix)
+
+- Define target CPU macros (`CPUAARCH64`, etc.) during cross-compilation so the ARM64 RTL code path is built.
+
+### Result
+
+- **Test output:** `Entering try block...` → `Success: Finally block executed!` → `Done.`
+- **CI status:** ✅ `success` on `feature/win-aarch64-opus45`
+
+### Why This Bug Existed
+
+The ARM64 COFF relocation code in FPC's internal linker appears to have been written without full testing on Windows ARM64. The ADRP/ADR instructions and their relocations are ARM64-specific (no equivalent on x86_64), so this bug would never manifest on x86_64. The original code had:
+- Sign extension checking bit 21 instead of bit 20 (off-by-one)
+- Treating the immediate as a page count instead of a byte offset
+
+Both issues combined to produce wildly incorrect target addresses for any PC-relative address load that wasn't exactly page-aligned.
+
+---
+
+## 7. Related docs
 
 - **In repo:** docs/AI-HELP-ARM64-UNWIND.md (context for AIs), docs/ARM64-WIN-UNWIND-RESEARCH.md (full research).
 - **Vault (Dropbox/personal/Vault/Projects/fpc):** AI-RESPONSES-ARM64-UNWIND-REF.md (full AI and branch proposal catalog), AI-UNWIND-LEARNINGS-SUMMARY.md (Vault copy of this doc).
