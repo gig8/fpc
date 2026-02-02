@@ -1482,13 +1482,17 @@ const pemagic : array[0..3] of byte = (
                   end;
                 RELOC_ADR_PREL_LO21:
                   begin
+                    { Extract the 21-bit signed immediate from the instruction }
                     addend:=((address shr 29) and $3) or (((address shr 5) and $7ffff) shl 2);
-                    { sign extend the value if necessary }
-                    if (addend and (1 shl 21)) <> 0 then
-                      addend:=addend or sarint64(1 shl 63,12);
-                    relocval:=relocval and $1fffff;
-                    relocval:=int64(relocval-objsec.mempos-objreloc.dataoffset+addend);
-                    address:=address and ($3 shl 29) and ($7ffff shl 5);
+                    { sign extend the 21-bit value - sign bit is at position 20 }
+                    if (addend and (1 shl 20)) <> 0 then
+                      addend:=addend or (not ((int64(1) shl 21) - 1));
+                    { ADR computes PC-relative address (no page alignment).
+                      Add addend to symbol address, then compute byte difference from PC. }
+                    relocval:=relocval + addend;  { target_addr = symbol_addr + addend }
+                    relocval:=relocval - (objsec.mempos + objreloc.dataoffset);  { byte_diff }
+                    { Encode the byte difference into the instruction }
+                    address:=address and not (($3 shl 29) or ($7ffff shl 5));
                     address:=address or ((relocval and $3) shl 29) or (((relocval shr 2) and $7ffff) shl 5);
                   end;
                 RELOC_ADR_PREL_PG_HI21:
