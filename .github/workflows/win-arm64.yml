@@ -14,9 +14,10 @@ name: Windows arm64
 on:
   push:
     # feature/win-aarch64* and win-aarch64* match various experiment branches.
-    branches: [ develop, feature/win-aarch64*, win-aarch64*, main, bounty-submission ]
+    # cursor/* for AI agent development branches.
+    branches: [ develop, feature/win-aarch64*, win-aarch64*, main, bounty-submission, cursor/* ]
   pull_request:
-    branches: [ develop, feature/win-aarch64*, win-aarch64*, main, bounty-submission ]
+    branches: [ develop, feature/win-aarch64*, win-aarch64*, main, bounty-submission, cursor/* ]
   workflow_dispatch:  # Run manually from Actions tab → "Windows arm64" → "Run workflow"
 
 env:
