@@ -295,6 +295,14 @@ procedure RtlUnwind(
   external 'kernel32.dll' name 'RtlUnwind';
 
 {$ifdef CPUAARCH64}
+{ For bypass diagnostic (FPC_ARM64_UNWIND_BYPASS_RTLUNWINDEX): call RtlRestoreContext
+  ourselves instead of RtlUnwindEx. Skips OS unwind loop (finally won't run).
+  https://learn.microsoft.com/en-us/windows/win32/api/winnt/nf-winnt-rtlrestorecontext }
+procedure RtlRestoreContext(ContextRecord: PContext; ExceptionRecord: PExceptionRecord); stdcall;
+  external 'ntdll.dll' name 'RtlRestoreContext';
+{$endif CPUAARCH64}
+
+{$ifdef CPUAARCH64}
 { Set by _fpc_local_unwind before RtlUnwindEx; read by __FPC_specific_handler
   when patching context during unwind. RtlUnwindEx overwrites our context at
   entry (Nynaeve), so the context the OS uses for RtlRestoreContext has the
@@ -586,7 +594,21 @@ begin
     Flush(stderr);  { critical: flush before we never return }
   end;
   {$endif FPC_DEBUG_WIN64_UNWIND}
+  {$ifdef FPC_ARM64_UNWIND_BYPASS_RTLUNWINDEX}
+  { Bypass diagnostic: skip RtlUnwindEx and restore our context directly.
+    Finally blocks will NOT run; we jump straight to the landing pad.
+    If we land and run without fault, our ctx is correct and the bug is in RtlUnwindEx. }
+  {$ifdef FPC_DEBUG_WIN64_UNWIND}
+  if IsConsole then
+  begin
+    writeln(stderr,'[FPC_DEBUG_WIN64_UNWIND] bypass: calling RtlRestoreContext (finally will NOT run)');
+    Flush(stderr);
+  end;
+  {$endif FPC_DEBUG_WIN64_UNWIND}
+  RtlRestoreContext(@ctx, nil);
+  {$else}
   RtlUnwindEx(FrameToUse, target, nil, nil, @ctx, @UnwindHistory);
+  {$endif FPC_ARM64_UNWIND_BYPASS_RTLUNWINDEX}
 {$else}
   RtlUnwindEx(frame, target, nil, nil, @ctx, nil);
 {$endif CPUAARCH64}
