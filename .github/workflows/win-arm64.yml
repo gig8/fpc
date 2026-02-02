@@ -60,7 +60,21 @@ jobs:
           tar -xf "$RUNNER_TEMP/llvm-mingw.tar.xz" -C "$RUNNER_TEMP/llvm-mingw" --strip-components=1
           "$RUNNER_TEMP/llvm-mingw/bin/aarch64-w64-mingw32-clang" --version
 
-      # FPC cross-build cache disabled: always build compiler and RTL from source.
+      # Cache FPC compiler object files for incremental builds.
+      # Key based on compiler source hash; restore-keys allow partial cache hits.
+      - name: Cache FPC compiler objects
+        id: cache_fpc_compiler
+        uses: actions/cache@v4
+        with:
+          path: |
+            compiler/*.o
+            compiler/*.ppu
+            compiler/aarch64/*.o
+            compiler/aarch64/*.ppu
+          key: fpc-compiler-${{ runner.os }}-${{ hashFiles('compiler/**/*.pas', 'compiler/**/*.inc', 'compiler/**/*.pp') }}
+          restore-keys: |
+            fpc-compiler-${{ runner.os }}-
+
       # FPC_ARM64_UNWIND_BYPASS_RTLUNWINDEX: diagnostic; skips RtlUnwindEx, calls RtlRestoreContext (finally won't run; pass = LANDED + Done.).
 
       - name: Cross-install FPC aarch64-win64
